@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 import uvicorn
+import os
 from config import settings
 from app.routers import transactions as transactions_router
 from app.routers import ml as ml_router
@@ -49,9 +50,11 @@ app = FastAPI(
 )
 
 # CORS Middleware
+# Allow origins from environment or default to localhost for development
+allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -68,7 +71,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         status_code=exc.status_code,
         content={"detail": exc.detail},
         headers={
-            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Origin": allowed_origins[0] if allowed_origins else "*",
             "Access-Control-Allow-Credentials": "true",
             "Access-Control-Allow-Methods": "*",
             "Access-Control-Allow-Headers": "*"
@@ -85,7 +88,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": str(exc)},
         headers={
-            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Origin": allowed_origins[0] if allowed_origins else "*",
             "Access-Control-Allow-Credentials": "true",
             "Access-Control-Allow-Methods": "*",
             "Access-Control-Allow-Headers": "*"
