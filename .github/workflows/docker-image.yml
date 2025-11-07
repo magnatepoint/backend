@@ -42,10 +42,11 @@ jobs:
             type=ref,event=branch
             type=sha
 
-      - name: Build and push
+         - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          context: backend
+          context: .
+          file: ./Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
