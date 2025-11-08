@@ -52,8 +52,8 @@ app = FastAPI(
 # CORS Middleware
 # Allow origins from environment or default to localhost for development
 # Production: Set CORS_ORIGINS env var with comma-separated list like:
-# CORS_ORIGINS=http://localhost:5173,http://localhost:3000,https://mallaapp.org,https://app.mallaapp.org
-default_origins = "http://localhost:5173,http://localhost:3000,https://mallaapp.org,https://app.mallaapp.org,https://frontend.mallaapp.org,https://backend.mallaapp.org"
+# CORS_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:55860,https://mallaapp.org,https://app.mallaapp.org
+default_origins = "http://localhost:5173,http://localhost:3000,http://localhost:55860,https://mallaapp.org,https://app.mallaapp.org,https://frontend.mallaapp.org,https://backend.mallaapp.org,http://backend.mallaapp.org"
 allowed_origins = os.getenv("CORS_ORIGINS", default_origins).split(",")
 app.add_middleware(
     CORSMiddleware,
