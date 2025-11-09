@@ -1,8 +1,10 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts'
 import { apiClient } from '../lib/api'
 import { formatCurrency, formatDate } from '../lib/utils'
 import { supabase } from '../lib/supabase'
+import { useToast } from '../context/ToastContext'
+import { PageSkeleton } from '../components/LoadingSkeleton'
 
 interface SpendingStats {
   period: string
@@ -50,6 +52,7 @@ interface InsightData {
 }
 
 export default function SpendSense() {
+  const { showToast } = useToast()
   const [stats, setStats] = useState<SpendingStats | null>(null)
   const [trends, setTrends] = useState<TrendData[]>([])
   const [byCategory, setByCategory] = useState<CategoryData[]>([])
@@ -58,6 +61,7 @@ export default function SpendSense() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [period, setPeriod] = useState('month')
+  const [searchQuery, setSearchQuery] = useState('')
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null)
   const [editForm, setEditForm] = useState<{
     merchant: string
@@ -153,9 +157,10 @@ export default function SpendSense() {
       setEditForm(null)
       // Reload transactions
       loadData()
+      showToast('Transaction updated successfully', 'success')
     } catch (err) {
       console.error('Failed to update transaction:', err)
-      alert('Failed to update transaction. Please try again.')
+      showToast('Failed to update transaction. Please try again.', 'error')
     }
   }
 
@@ -172,9 +177,10 @@ export default function SpendSense() {
       await apiClient.deleteTransaction(txnId)
       // Reload transactions
       loadData()
+      showToast('Transaction deleted successfully', 'success')
     } catch (err) {
       console.error('Failed to delete transaction:', err)
-      alert('Failed to delete transaction. Please try again.')
+      showToast('Failed to delete transaction. Please try again.', 'error')
     } finally {
       setDeletingId(null)
     }
@@ -182,7 +188,7 @@ export default function SpendSense() {
 
   const handleAddTransaction = async () => {
     if (!addForm.merchant || !addForm.amount || !addForm.date) {
-      alert('Please fill in all required fields (Merchant, Amount, Date)')
+      showToast('Please fill in all required fields (Merchant, Amount, Date)', 'warning')
       return
     }
 
@@ -216,9 +222,10 @@ export default function SpendSense() {
       setShowAddModal(false)
       // Reload transactions
       loadData()
+      showToast('Transaction added successfully', 'success')
     } catch (err) {
       console.error('Failed to create transaction:', err)
-      alert('Failed to create transaction. Please try again.')
+      showToast('Failed to create transaction. Please try again.', 'error')
     }
   }
 
@@ -295,6 +302,22 @@ export default function SpendSense() {
     }
   }, [loadData])
 
+  // Filter transactions based on search query
+  const filteredTransactions = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return transactions
+    }
+    
+    const query = searchQuery.toLowerCase()
+    return transactions.filter((txn) => {
+      const merchant = (txn.merchant_name_norm || txn.merchant || '').toLowerCase()
+      const category = (txn.category_code || txn.category || '').toLowerCase()
+      const amount = String(txn.amount || '').toLowerCase()
+      
+      return merchant.includes(query) || category.includes(query) || amount.includes(query)
+    })
+  }, [transactions, searchQuery])
+
   // Calculate max values for visualizations
   const maxTrendSpending = trends.length > 0 
     ? Math.max(...trends.map(t => t.spending || 0))
@@ -308,19 +331,7 @@ export default function SpendSense() {
   ]
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-6 md:p-8">
-        <div className="max-w-7xl mx-auto">
-          <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold mb-6 bg-gradient-to-r from-yellow-400 to-yellow-600 bg-clip-text text-transparent">
-            SpendSense
-          </h1>
-          <div className="text-center py-12">
-            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-yellow-500"></div>
-            <p className="mt-4 text-gray-400">Loading data...</p>
-          </div>
-        </div>
-      </div>
-    )
+    return <PageSkeleton />
   }
 
   return (
@@ -533,17 +544,37 @@ export default function SpendSense() {
             <h2 className="text-lg sm:text-xl font-bold text-yellow-400 flex items-center gap-2">
               <span>💳</span> Recent Transactions
             </h2>
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-black rounded-lg font-semibold transition-colors text-sm sm:text-base flex items-center gap-2 justify-center"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Add Transaction
-            </button>
+            <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+              {/* Search Input */}
+              <div className="relative flex-1 sm:max-w-xs">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search transactions..."
+                  className="w-full px-4 py-2 pl-10 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-yellow-500 text-sm"
+                />
+                <svg
+                  className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-black rounded-lg font-semibold transition-colors text-sm sm:text-base flex items-center gap-2 justify-center whitespace-nowrap"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Add Transaction
+              </button>
+            </div>
           </div>
-          {transactions.length > 0 ? (
+          {filteredTransactions.length > 0 ? (
             <div className="overflow-x-auto -mx-4 sm:mx-0">
               <div className="inline-block min-w-full align-middle">
                 <table className="min-w-full divide-y divide-gray-700">
@@ -557,7 +588,7 @@ export default function SpendSense() {
                     </tr>
                   </thead>
                   <tbody>
-                    {transactions.map((txn, idx) => {
+                    {filteredTransactions.map((txn, idx) => {
                       const isCredit = (txn.direction || txn.transaction_type) === 'credit'
                       return (
                         <tr 
@@ -627,8 +658,36 @@ export default function SpendSense() {
               </div>
             </div>
           ) : (
-            <div className="text-center py-8 text-gray-400">
-              <p>No transactions found. Click "Add Transaction" to create one.</p>
+            <div className="text-center py-12 text-gray-400">
+              {searchQuery ? (
+                <>
+                  <svg className="w-16 h-16 mx-auto mb-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                  <p className="text-lg font-medium mb-2">No transactions found</p>
+                  <p className="text-sm">Try adjusting your search query</p>
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="mt-4 px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+                  >
+                    Clear Search
+                  </button>
+                </>
+              ) : (
+                <>
+                  <svg className="w-16 h-16 mx-auto mb-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <p className="text-lg font-medium mb-2">No transactions yet</p>
+                  <p className="text-sm mb-4">Get started by adding your first transaction</p>
+                  <button
+                    onClick={() => setShowAddModal(true)}
+                    className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-black rounded-lg font-semibold transition-colors"
+                  >
+                    Add Transaction
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
