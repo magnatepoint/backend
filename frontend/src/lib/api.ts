@@ -622,6 +622,7 @@ class ApiClient {
     description: string
     merchant?: string
     category?: string
+    subcategory?: string
     bank?: string
     transaction_type: string
   }) {

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts'
 import { apiClient } from '../lib/api'
 import { formatCurrency, formatDate } from '../lib/utils'
+import { supabase } from '../lib/supabase'
 
 interface SpendingStats {
   period: string
@@ -70,16 +71,19 @@ export default function SpendSense() {
   const [addForm, setAddForm] = useState<{
     merchant: string
     category: string
+    subcategory: string
     amount: string
     date: string
     transaction_type: 'credit' | 'debit'
   }>({
     merchant: '',
     category: '',
+    subcategory: '',
     amount: '',
     date: new Date().toISOString().split('T')[0],
     transaction_type: 'debit'
   })
+  const [subcategories, setSubcategories] = useState<Array<{ subcategory_code: string; subcategory_name: string }>>([])
 
   // Load categories for edit form
   useEffect(() => {
@@ -87,6 +91,17 @@ export default function SpendSense() {
       .then(cats => setCategories(cats))
       .catch(() => setCategories([]))
   }, [])
+
+  // Load subcategories when category changes in add form
+  useEffect(() => {
+    if (addForm.category && showAddModal) {
+      apiClient.getSubcategories(addForm.category)
+        .then(subs => setSubcategories(subs))
+        .catch(() => setSubcategories([]))
+    } else {
+      setSubcategories([])
+    }
+  }, [addForm.category, showAddModal])
 
   const handleEdit = (txn: Transaction) => {
     const txnId = txn.txn_id || txn.id
@@ -184,6 +199,7 @@ export default function SpendSense() {
         description: addForm.merchant,
         merchant: addForm.merchant,
         category: addForm.category || undefined,
+        subcategory: addForm.subcategory || undefined,
         transaction_type: addForm.transaction_type
       })
       
@@ -191,10 +207,12 @@ export default function SpendSense() {
       setAddForm({
         merchant: '',
         category: '',
+        subcategory: '',
         amount: '',
         date: new Date().toISOString().split('T')[0],
         transaction_type: 'debit'
       })
+      setSubcategories([])
       setShowAddModal(false)
       // Reload transactions
       loadData()
@@ -256,6 +274,25 @@ export default function SpendSense() {
 
   useEffect(() => {
     loadData()
+  }, [loadData])
+
+  // Listen for auth state changes to reload data when user changes
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'USER_UPDATED') {
+        // Clear all state and reload data when user changes
+        setStats(null)
+        setTrends([])
+        setByCategory([])
+        setTransactions([])
+        setInsights([])
+        loadData()
+      }
+    })
+
+    return () => {
+      subscription.unsubscribe()
+    }
   }, [loadData])
 
   // Calculate max values for visualizations
@@ -618,7 +655,7 @@ export default function SpendSense() {
                   <label className="block text-sm font-medium text-gray-300 mb-2">Category</label>
                   <select
                     value={addForm.category}
-                    onChange={(e) => setAddForm({ ...addForm, category: e.target.value })}
+                    onChange={(e) => setAddForm({ ...addForm, category: e.target.value, subcategory: '' })}
                     className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-yellow-500"
                   >
                     <option value="">Select category</option>
@@ -629,6 +666,25 @@ export default function SpendSense() {
                     ))}
                   </select>
                 </div>
+
+                {addForm.category && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">Subcategory</label>
+                    <select
+                      value={addForm.subcategory}
+                      onChange={(e) => setAddForm({ ...addForm, subcategory: e.target.value })}
+                      className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-yellow-500"
+                      disabled={subcategories.length === 0}
+                    >
+                      <option value="">Select subcategory (optional)</option>
+                      {subcategories.map((sub) => (
+                        <option key={sub.subcategory_code} value={sub.subcategory_code}>
+                          {sub.subcategory_name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-2">Transaction Type *</label>
@@ -679,10 +735,12 @@ export default function SpendSense() {
                     setAddForm({
                       merchant: '',
                       category: '',
+                      subcategory: '',
                       amount: '',
                       date: new Date().toISOString().split('T')[0],
                       transaction_type: 'debit'
                     })
+                    setSubcategories([])
                   }}
                   className="flex-1 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors text-sm sm:text-base"
                 >
