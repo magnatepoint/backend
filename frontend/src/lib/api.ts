@@ -1,7 +1,14 @@
 /**
  * API Client for Monytix Backend
+ * Note: Using HTTPS with Cloudflare Tunnels - redirects are blocked to prevent CORS preflight failures
  */
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://backend.mallaapp.org'
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://backend.mallaapp.org'
+
+// Debug: Log the API URL being used (only in development)
+if (import.meta.env.DEV) {
+  console.log('🔧 API Base URL:', API_BASE_URL)
+  console.log('🔧 VITE_API_URL env var:', import.meta.env.VITE_API_URL)
+}
 
 export interface ApiResponse<T> {
   data?: T
@@ -34,10 +41,19 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${token}`
     }
     
+    // Remove any trailing slashes from endpoint to avoid redirect issues
+    const cleanEndpoint = endpoint.replace(/\/+$/, '') || '/'
+    let url = `${this.baseUrl}${cleanEndpoint}`
+    
+    // Ensure we're using HTTPS (not HTTP) to avoid redirect issues
+    // Replace HTTP with HTTPS if present
+    url = url.replace(/^http:/, 'https:')
+    
     try {
-      const response = await fetch(`${this.baseUrl}${endpoint}`, {
+      const response = await fetch(url, {
         ...options,
-        headers
+        headers,
+        redirect: 'error' // Don't follow redirects - fail if redirect happens
       })
       
       // Read response text once (can only read body once)
@@ -82,6 +98,13 @@ class ApiClient {
         return text || null
       }
     } catch (error) {
+      // Only log non-network errors to avoid console spam from CORS issues
+      // Network errors (CORS, fetch failures) are expected and handled gracefully
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        // Network/CORS error - silently rethrow (will be caught by caller)
+        throw error
+      }
+      // Other errors (parsing, API errors) should be logged
       console.error('API Request failed:', error)
       throw error
     }
