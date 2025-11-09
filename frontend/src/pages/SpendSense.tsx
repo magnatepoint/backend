@@ -708,7 +708,7 @@ export default function SpendSense() {
                 <Tooltip content="Export all filtered transactions to CSV file">
                   <button
                     onClick={handleExportCSV}
-                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-semibold transition-all duration-200 hover:scale-105 active:scale-95 text-sm sm:text-base flex items-center gap-2 justify-center whitespace-nowrap"
+                    className="px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-all duration-200 hover:scale-105 active:scale-95 text-sm sm:text-base flex items-center gap-2 justify-center whitespace-nowrap shadow-md"
                     title="Export to CSV"
                   >
                     <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
