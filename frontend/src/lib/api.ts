@@ -25,14 +25,28 @@ class ApiClient {
     this.baseUrl = baseUrl
   }
   
-  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    // Get token from Supabase session
+  private async request<T>(endpoint: string, options: RequestInit = {}, retryCount = 0): Promise<T> {
+    // Get token from Supabase session - refresh if needed
     const { supabase } = await import('./supabase')
-    const { data: { session } } = await supabase.auth.getSession()
+    
+    // Get fresh session (this will refresh if needed)
+    let { data: { session }, error: sessionError } = await supabase.auth.getSession()
+    
+    // If no session or error, try to refresh
+    if (!session || sessionError) {
+      const { data: { session: refreshedSession } } = await supabase.auth.refreshSession()
+      session = refreshedSession
+    }
+    
     const token = session?.access_token || null
     
     if (!token) {
       console.warn('No auth token available. User may need to log in.')
+      // Redirect to login if no token
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+      throw new Error('No authentication token available')
     }
     
     const headers: Record<string, string> = {
@@ -64,6 +78,35 @@ class ApiClient {
       const text = await response.text()
       
       if (!response.ok) {
+        // Handle 401/403 errors by refreshing token and retrying once
+        if ((response.status === 401 || response.status === 403) && retryCount === 0) {
+          console.log('Token expired or invalid, attempting to refresh...')
+          try {
+            // Refresh the session
+            const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession()
+            
+            if (refreshedSession?.access_token) {
+              console.log('Token refreshed, retrying request...')
+              // Retry the request with the new token
+              return this.request<T>(endpoint, options, retryCount + 1)
+            } else {
+              console.error('Failed to refresh token:', refreshError)
+              // Redirect to login if refresh fails
+              if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+                window.location.href = '/login'
+              }
+              throw new Error('Failed to refresh authentication token')
+            }
+          } catch (refreshErr) {
+            console.error('Error refreshing token:', refreshErr)
+            // Redirect to login if refresh fails
+            if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+              window.location.href = '/login'
+            }
+            throw new Error('Authentication failed. Please log in again.')
+          }
+        }
+        
         let errorData: { detail?: string; message?: string }
         if (text) {
           try {
