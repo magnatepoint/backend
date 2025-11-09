@@ -799,7 +799,6 @@ export default function SpendSense() {
                     <tbody>
                       {paginatedTransactions.map((txn, idx) => {
                       const isCredit = (txn.direction || txn.transaction_type) === 'credit'
-                      const txnId = txn.txn_id || txn.id
                       return (
                         <SwipeableRow
                           key={idx}
