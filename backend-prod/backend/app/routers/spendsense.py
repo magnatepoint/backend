@@ -951,67 +951,110 @@ async def get_top_merchants(
 async def get_insights(
     user: UserDep = Depends(get_current_user)
 ):
-    """Return spending insights.
+    """Return spending insights using materialized view mv_spendsense_insights_user_month.
 
     Shows top 5 categories by spending amount for the most recent month with substantial data.
-    Returns [{ type, category, message }].
+    Returns [{ type, category, change_percentage, message }].
     """
     session = SessionLocal()
     try:
         user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
         
-        # Find the most recent month with substantial data (at least 10 transactions)
-        month_stats = session.execute(text("""
-            SELECT 
-                date_trunc('month', txn_date)::date as month,
-                COUNT(*) as txn_count
-            FROM spendsense.txn_fact
-            WHERE user_id = :uid
-            GROUP BY date_trunc('month', txn_date)
-            HAVING COUNT(*) >= 10
-            ORDER BY month DESC
-            LIMIT 1
-        """), {"uid": str(user_uuid)}).fetchone()
-        
-        if not month_stats or not month_stats[0]:
-            return {"insights": []}
-        
-        target_month = month_stats[0]
-        
-        # Get top 5 categories by spending for that month from KPI table
+        # Try using materialized view first
         try:
-            category_rows = session.execute(text("""
+            view = "spendsense.mv_spendsense_insights_user_month"
+            
+            # Get the most recent month with data
+            month_row = session.execute(text(f"""
+                SELECT month, SUM(txn_count) as total_txn
+                FROM {view}
+                WHERE user_id = :uid
+                GROUP BY month
+                HAVING SUM(txn_count) >= 10
+                ORDER BY month DESC
+                LIMIT 1
+            """), {"uid": str(user_uuid)}).fetchone()
+            
+            if not month_row or not month_row[0]:
+                return {"insights": []}
+            
+            target_month = month_row[0]
+            
+            # Get top 5 categories by spending for that month from materialized view
+            category_rows = session.execute(text(f"""
                 SELECT 
-                    k.category_code,
+                    i.category_code,
                     dc.category_name,
-                    k.spend_amt
-                FROM spendsense.kpi_category_monthly k
-                LEFT JOIN spendsense.dim_category dc ON dc.category_code = k.category_code
-                WHERE k.user_id = :uid
-                AND k.month = :target_month
-                AND k.category_code NOT IN ('income', 'transfers')
-                AND k.spend_amt > 0
-                ORDER BY k.spend_amt DESC
+                    i.spend_amt,
+                    i.txn_count
+                FROM {view} i
+                LEFT JOIN spendsense.dim_category dc ON dc.category_code = i.category_code
+                WHERE i.user_id = :uid
+                AND i.month = :target_month
+                AND i.category_code NOT IN ('income', 'transfers', 'others')
+                AND i.spend_amt > 0
+                ORDER BY i.spend_amt DESC
                 LIMIT 5
             """), {"uid": str(user_uuid), "target_month": target_month}).fetchall()
             
-            insights = []
-            for cat_code, cat_name, amt in category_rows:
-                # Format category name nicely
-                display_name = cat_name or cat_code or 'Uncategorized'
-                insights.append({
-                    "type": "top_category",
-                    "category": cat_code or 'Uncategorized',
-                    "message": f"{display_name}: ₹{round(float(amt)):.0f}"
-                })
-            
-            if insights:
+            if category_rows:
+                # Get previous month for comparison
+                prev_month = session.execute(text(f"""
+                    SELECT month
+                    FROM {view}
+                    WHERE user_id = :uid
+                    AND month < :target_month
+                    ORDER BY month DESC
+                    LIMIT 1
+                """), {"uid": str(user_uuid), "target_month": target_month}).scalar()
+                
+                insights = []
+                for cat_code, cat_name, spend_amt, txn_count in category_rows:
+                    display_name = cat_name or cat_code or 'Uncategorized'
+                    
+                    # Calculate change percentage if previous month exists
+                    change_percentage = 0.0
+                    if prev_month:
+                        prev_spend = session.execute(text(f"""
+                            SELECT spend_amt
+                            FROM {view}
+                            WHERE user_id = :uid
+                            AND month = :prev_month
+                            AND category_code = :cat_code
+                        """), {"uid": str(user_uuid), "prev_month": prev_month, "cat_code": cat_code}).scalar() or 0
+                        
+                        if prev_spend > 0:
+                            change_percentage = ((float(spend_amt) - float(prev_spend)) / float(prev_spend)) * 100
+                    
+                    insights.append({
+                        "type": "top_category",
+                        "category": cat_code or 'Uncategorized',
+                        "change_percentage": round(change_percentage, 1),
+                        "message": f"{display_name}: ₹{round(float(spend_amt)):.0f} ({txn_count} transactions)"
+                    })
+                
                 return {"insights": insights}
         except Exception as e:
-            print(f"⚠️  Error fetching top categories from KPI: {e}")
+            print(f"⚠️  Materialized view query failed: {e}")
         
-        # Fallback: compute from fact table for the target month
+        # Fallback: compute from fact table (original logic)
         try:
+            month_stats = session.execute(text("""
+                SELECT 
+                    date_trunc('month', txn_date)::date as month,
+                    COUNT(*) as txn_count
+                FROM spendsense.txn_fact
+                WHERE user_id = :uid
+                GROUP BY date_trunc('month', txn_date)
+                HAVING COUNT(*) >= 10
+                ORDER BY month DESC
+                LIMIT 1
+            """), {"uid": str(user_uuid)}).fetchone()
+            
+            if not month_stats or not month_stats[0]:
+                return {"insights": []}
+            
+            target_month = month_stats[0]
             from datetime import date
             month_date = target_month if isinstance(target_month, date) else datetime.strptime(str(target_month), '%Y-%m-%d').date()
             month_start = datetime.combine(month_date.replace(day=1), datetime.min.time())
@@ -1027,8 +1070,8 @@ async def get_insights(
                 TxnFact.user_id == user_uuid,
                 TxnFact.txn_date >= month_start.date(),
                 TxnFact.txn_date <= month_end.date(),
-                TxnFact.direction == 'debit',  # Only debits (spending)
-                TxnEnriched.category_code.notin_(['income', 'transfers'])  # Exclude income and transfers
+                TxnFact.direction == 'debit',
+                TxnEnriched.category_code.notin_(['income', 'transfers'])
             ).group_by(TxnEnriched.category_code).order_by(func.sum(func.abs(TxnFact.amount)).desc()).limit(5).all()
 
             insights = []
@@ -1040,6 +1083,7 @@ async def get_insights(
                 insights.append({
                     "type": "top_category",
                     "category": cat or 'Uncategorized',
+                    "change_percentage": 0.0,
                     "message": f"{cat_name}: ₹{round(float(amt or 0)):.0f}"
                 })
             return {"insights": insights}
