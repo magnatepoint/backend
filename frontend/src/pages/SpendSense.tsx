@@ -7,6 +7,7 @@ import { useToast } from '../context/ToastContext'
 import { PageSkeleton } from '../components/LoadingSkeleton'
 import { Tooltip } from '../components/Tooltip'
 import { usePullToRefresh } from '../hooks/usePullToRefresh'
+import { SwipeableRow } from '../components/SwipeableRow'
 
 interface SpendingStats {
   period: string
