@@ -1,10 +1,43 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Outlet, Link, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
 export default function Layout() {
   const location = useLocation()
   const [isCollapsed, setIsCollapsed] = useState(false)
+  const [userEmail, setUserEmail] = useState<string>('')
+  const [userInitial, setUserInitial] = useState<string>('U')
+
+  // Load user information from session
+  useEffect(() => {
+    const loadUser = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session?.user?.email) {
+        setUserEmail(session.user.email)
+        // Get first letter of email for avatar
+        const initial = session.user.email.charAt(0).toUpperCase()
+        setUserInitial(initial)
+      }
+    }
+
+    loadUser()
+
+    // Listen for auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session?.user?.email) {
+        setUserEmail(session.user.email)
+        const initial = session.user.email.charAt(0).toUpperCase()
+        setUserInitial(initial)
+      } else {
+        setUserEmail('')
+        setUserInitial('U')
+      }
+    })
+
+    return () => {
+      subscription.unsubscribe()
+    }
+  }, [])
 
   const handleSignOut = async () => {
     try {
@@ -94,12 +127,16 @@ export default function Layout() {
         <div className={`mt-auto pt-4 border-t border-gray-700 ${isCollapsed ? 'px-2' : 'px-6'} space-y-2`}>
           <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} py-2`}>
             <div className="w-8 h-8 bg-gray-600 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0">
-              S
+              {userInitial}
             </div>
-            {!isCollapsed && (
+            {!isCollapsed && userEmail && (
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">santoshmalla</p>
-                <p className="text-xs text-gray-400 truncate">santoshmalla221989...</p>
+                <p className="text-sm font-medium truncate">
+                  {userEmail.split('@')[0]}
+                </p>
+                <p className="text-xs text-gray-400 truncate">
+                  {userEmail}
+                </p>
               </div>
             )}
           </div>
