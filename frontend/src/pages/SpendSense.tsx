@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase'
 import { useToast } from '../context/ToastContext'
 import { PageSkeleton } from '../components/LoadingSkeleton'
 import { Tooltip } from '../components/Tooltip'
+import { usePullToRefresh } from '../hooks/usePullToRefresh'
 
 interface SpendingStats {
   period: string
@@ -422,12 +423,42 @@ export default function SpendSense() {
     { value: 'year', label: 'Year' }
   ]
 
+  // Pull to refresh
+  const { isRefreshing, pullProgress, elementRef } = usePullToRefresh({
+    onRefresh: loadData,
+    enabled: true,
+  })
+
   if (loading) {
     return <PageSkeleton />
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-6 md:p-8">
+    <div 
+      ref={elementRef as React.RefObject<HTMLDivElement>}
+      className="min-h-screen bg-gray-900 text-white p-4 sm:p-6 md:p-8 relative"
+    >
+      {/* Pull to Refresh Indicator */}
+      {isRefreshing && (
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 bg-gray-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 animate-fade-in">
+          <svg className="w-5 h-5 animate-spin text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <span className="text-sm text-white">Refreshing...</span>
+        </div>
+      )}
+      
+      {pullProgress > 0 && !isRefreshing && (
+        <div 
+          className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 bg-gray-800 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 transition-opacity"
+          style={{ opacity: Math.min(pullProgress, 1) }}
+        >
+          <svg className="w-5 h-5 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+          </svg>
+          <span className="text-sm text-white">Pull to refresh</span>
+        </div>
+      )}
       <div className="max-w-7xl mx-auto">
         {/* Header with Period Selector */}
         <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-6 md:mb-8">
@@ -768,11 +799,34 @@ export default function SpendSense() {
                     <tbody>
                       {paginatedTransactions.map((txn, idx) => {
                       const isCredit = (txn.direction || txn.transaction_type) === 'credit'
+                      const txnId = txn.txn_id || txn.id
                       return (
-                        <tr 
-                          key={idx} 
-                          className="border-b border-gray-700/50 hover:bg-gray-700/30 transition-colors"
+                        <SwipeableRow
+                          key={idx}
+                          onSwipeLeft={() => handleDelete(txn)}
+                          onSwipeRight={() => handleEdit(txn)}
+                          leftAction={
+                            <div className="flex items-center gap-2 text-white">
+                              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                              <span className="font-semibold">Delete</span>
+                            </div>
+                          }
+                          rightAction={
+                            <div className="flex items-center gap-2 text-white">
+                              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
+                              <span className="font-semibold">Edit</span>
+                            </div>
+                          }
+                          enabled={typeof window !== 'undefined' && window.innerWidth < 640}
+                          className="sm:block hidden"
                         >
+                          <tr 
+                            className="border-b border-gray-700/50 hover:bg-gray-700/30 transition-colors"
+                          >
                           <td className="py-3 px-2 sm:px-4 text-gray-400 text-xs sm:text-sm whitespace-nowrap">
                             {formatDate(txn.transaction_date || txn.txn_date || new Date())}
                           </td>
@@ -829,8 +883,9 @@ export default function SpendSense() {
                           </div>
                         </td>
                       </tr>
-                    )
-                  })}
+                        </SwipeableRow>
+                      )
+                    })}
                 </tbody>
               </table>
               </div>
