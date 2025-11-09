@@ -5,11 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "npm install --include=optional && tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
-    "install": "npm install --include=optional",
-    "prebuild": "npm install --include=optional || npm install"
+    "install": "npm install --include=optional"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.76.1",
