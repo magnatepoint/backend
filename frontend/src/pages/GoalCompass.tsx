@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts'
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts'
 import { apiClient } from '../lib/api'
 import { formatCurrency, formatDate } from '../lib/utils'
 
@@ -63,7 +63,7 @@ interface GoalInsight {
 interface CatalogItem {
   goal_category: string
   goal_name: string
-  default_horizon: 'short_term' | 'medium_term' | 'long_term'
+  default_horizon: string
   policy_linked_txn_type: 'needs' | 'wants' | 'assets'
   auto_suggest?: string | null
   recommended?: boolean
@@ -73,7 +73,7 @@ interface CatalogItem {
 export default function GoalCompass() {
   const [goalProgress, setGoalProgress] = useState<GoalProgress[]>([])
   const [dashboard, setDashboard] = useState<DashboardData | null>(null)
-  const [insights, setInsights] = useState<GoalInsight[]>([])
+  const [_insights, setInsights] = useState<GoalInsight[]>([])
   const [selectedGoal, setSelectedGoal] = useState<string | null>(null)
   const [milestones, setMilestones] = useState<Milestone[]>([])
   const [contributions, setContributions] = useState<Contribution[]>([])
@@ -123,7 +123,11 @@ export default function GoalCompass() {
 
       if (results[0].status === 'fulfilled') {
         const progress = results[0].value
-        setGoalProgress(progress?.goals || [])
+        const goals = (progress?.goals || []).map((g) => ({
+          ...g,
+          target_date: g.target_date || null
+        })) as GoalProgress[]
+        setGoalProgress(goals)
       }
       if (results[1].status === 'fulfilled') {
         setDashboard(results[1].value)

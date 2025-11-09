@@ -2,11 +2,14 @@
  * API Client for Monytix Backend
  * Note: Using HTTPS with Cloudflare Tunnels - redirects are blocked to prevent CORS preflight failures
  */
+// @ts-expect-error - Vite env variables
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://backend.mallaapp.org'
 
 // Debug: Log the API URL being used (only in development)
+// @ts-expect-error - Vite env variables
 if (import.meta.env.DEV) {
   console.log('🔧 API Base URL:', API_BASE_URL)
+  // @ts-expect-error - Vite env variables
   console.log('🔧 VITE_API_URL env var:', import.meta.env.VITE_API_URL)
 }
 
@@ -82,20 +85,20 @@ class ApiClient {
       
       // Success response - parse JSON if available
       if (!text || text.trim() === '') {
-        return null
+        return null as T
       }
       
       // Try to parse as JSON if content-type suggests JSON or if it looks like JSON
       if (contentType.includes('application/json') || (text.trim().startsWith('{') || text.trim().startsWith('['))) {
         try {
-          return JSON.parse(text)
+          return JSON.parse(text) as T
         } catch (parseError) {
           console.error('JSON parse error:', parseError, 'Response text:', text.substring(0, 200))
           throw new Error(`Invalid JSON response: ${parseError}`)
         }
       } else {
         // Non-JSON response - return as text
-        return text || null
+        return (text || null) as T
       }
     } catch (error) {
       // Only log non-network errors to avoid console spam from CORS issues
@@ -764,6 +767,8 @@ class ApiClient {
         goal_name: string
         goal_category: string
         goal_type: string
+        month: string
+        estimated_cost: number
         progress_pct: number
         progress_amount: number
         remaining_amount: number
@@ -772,6 +777,7 @@ class ApiClient {
         on_track_flag: boolean
         risk_level: 'low' | 'medium' | 'high'
         commentary: string
+        target_date?: string | null
       }>
     }>(`/api/goalcompass/progress${query ? `?${query}` : ''}`)
   }

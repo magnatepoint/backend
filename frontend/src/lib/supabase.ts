@@ -1,6 +1,8 @@
 import { createClient } from '@supabase/supabase-js'
 
+// @ts-expect-error - Vite env variables
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || ''
+// @ts-expect-error - Vite env variables
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
 
 // Validate environment variables
