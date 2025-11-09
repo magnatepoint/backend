@@ -1,10 +1,9 @@
 import { useState } from 'react'
-import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
+import { Outlet, Link, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
 export default function Layout() {
   const location = useLocation()
-  const navigate = useNavigate()
   const [isCollapsed, setIsCollapsed] = useState(false)
 
   const handleSignOut = async () => {

@@ -151,7 +151,24 @@ export default function GoalCompass() {
   useEffect(() => {
     if (showAddGoalModal && !goalCatalog) {
       apiClient.getGoalsCatalog()
-        .then(catalog => setGoalCatalog(catalog))
+        .then(catalog => {
+          // Map catalog items to ensure type compatibility
+          const mappedCatalog = {
+            short: (catalog.short || []).map(item => ({
+              ...item,
+              default_horizon: item.default_horizon as string
+            })),
+            medium: (catalog.medium || []).map(item => ({
+              ...item,
+              default_horizon: item.default_horizon as string
+            })),
+            long: (catalog.long || []).map(item => ({
+              ...item,
+              default_horizon: item.default_horizon as string
+            }))
+          }
+          setGoalCatalog(mappedCatalog)
+        })
         .catch(() => setGoalCatalog({ short: [], medium: [], long: [] }))
     }
   }, [showAddGoalModal, goalCatalog])
