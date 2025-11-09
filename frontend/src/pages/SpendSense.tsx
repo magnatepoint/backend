@@ -66,6 +66,20 @@ export default function SpendSense() {
   } | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [categories, setCategories] = useState<Array<{ category_code: string; category_name: string }>>([])
+  const [showAddModal, setShowAddModal] = useState(false)
+  const [addForm, setAddForm] = useState<{
+    merchant: string
+    category: string
+    amount: string
+    date: string
+    transaction_type: 'credit' | 'debit'
+  }>({
+    merchant: '',
+    category: '',
+    amount: '',
+    date: new Date().toISOString().split('T')[0],
+    transaction_type: 'debit'
+  })
 
   // Load categories for edit form
   useEffect(() => {
@@ -148,6 +162,45 @@ export default function SpendSense() {
       alert('Failed to delete transaction. Please try again.')
     } finally {
       setDeletingId(null)
+    }
+  }
+
+  const handleAddTransaction = async () => {
+    if (!addForm.merchant || !addForm.amount || !addForm.date) {
+      alert('Please fill in all required fields (Merchant, Amount, Date)')
+      return
+    }
+
+    try {
+      // Format date as ISO string for API
+      const dateISO = new Date(addForm.date).toISOString()
+      
+      // Amount should be positive - backend uses transaction_type to determine credit/debit
+      const amount = Math.abs(parseFloat(addForm.amount))
+      
+      await apiClient.createTransaction({
+        amount: amount,
+        transaction_date: dateISO,
+        description: addForm.merchant,
+        merchant: addForm.merchant,
+        category: addForm.category || undefined,
+        transaction_type: addForm.transaction_type
+      })
+      
+      // Reset form and close modal
+      setAddForm({
+        merchant: '',
+        category: '',
+        amount: '',
+        date: new Date().toISOString().split('T')[0],
+        transaction_type: 'debit'
+      })
+      setShowAddModal(false)
+      // Reload transactions
+      loadData()
+    } catch (err) {
+      console.error('Failed to create transaction:', err)
+      alert('Failed to create transaction. Please try again.')
     }
   }
 
@@ -438,11 +491,22 @@ export default function SpendSense() {
         )}
 
         {/* Enhanced Recent Transactions */}
-        {transactions.length > 0 && (
-          <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700">
-            <h2 className="text-lg sm:text-xl font-bold mb-4 sm:mb-6 text-yellow-400 flex items-center gap-2">
+        <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 sm:mb-6 gap-4">
+            <h2 className="text-lg sm:text-xl font-bold text-yellow-400 flex items-center gap-2">
               <span>💳</span> Recent Transactions
             </h2>
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-black rounded-lg font-semibold transition-colors text-sm sm:text-base flex items-center gap-2 justify-center"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Add Transaction
+            </button>
+          </div>
+          {transactions.length > 0 ? (
             <div className="overflow-x-auto -mx-4 sm:mx-0">
               <div className="inline-block min-w-full align-middle">
                 <table className="min-w-full divide-y divide-gray-700">
@@ -523,6 +587,107 @@ export default function SpendSense() {
                   })}
                 </tbody>
               </table>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-8 text-gray-400">
+              <p>No transactions found. Click "Add Transaction" to create one.</p>
+            </div>
+          )}
+        </div>
+
+        {/* Add Transaction Modal */}
+        {showAddModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 sm:p-6">
+            <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700 max-w-md w-full max-h-[90vh] overflow-y-auto">
+              <h2 className="text-xl sm:text-2xl font-bold mb-4 sm:mb-6 text-yellow-400">Add Transaction</h2>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Merchant *</label>
+                  <input
+                    type="text"
+                    value={addForm.merchant}
+                    onChange={(e) => setAddForm({ ...addForm, merchant: e.target.value })}
+                    className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-yellow-500"
+                    placeholder="Enter merchant name"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Category</label>
+                  <select
+                    value={addForm.category}
+                    onChange={(e) => setAddForm({ ...addForm, category: e.target.value })}
+                    className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-yellow-500"
+                  >
+                    <option value="">Select category</option>
+                    {categories.map((cat) => (
+                      <option key={cat.category_code} value={cat.category_code}>
+                        {cat.category_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Transaction Type *</label>
+                  <select
+                    value={addForm.transaction_type}
+                    onChange={(e) => setAddForm({ ...addForm, transaction_type: e.target.value as 'credit' | 'debit' })}
+                    className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-yellow-500"
+                  >
+                    <option value="debit">Debit (Expense)</option>
+                    <option value="credit">Credit (Income)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Amount (₹) *</label>
+                  <input
+                    type="number"
+                    value={addForm.amount}
+                    onChange={(e) => setAddForm({ ...addForm, amount: e.target.value })}
+                    className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-yellow-500"
+                    min="0"
+                    step="0.01"
+                    placeholder="Enter amount"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Date *</label>
+                  <input
+                    type="date"
+                    value={addForm.date}
+                    onChange={(e) => setAddForm({ ...addForm, date: e.target.value })}
+                    className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-yellow-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 mt-6">
+                <button
+                  onClick={handleAddTransaction}
+                  className="flex-1 px-4 py-2.5 bg-yellow-500 hover:bg-yellow-600 text-black rounded-lg font-semibold transition-colors text-sm sm:text-base"
+                >
+                  Add Transaction
+                </button>
+                <button
+                  onClick={() => {
+                    setShowAddModal(false)
+                    setAddForm({
+                      merchant: '',
+                      category: '',
+                      amount: '',
+                      date: new Date().toISOString().split('T')[0],
+                      transaction_type: 'debit'
+                    })
+                  }}
+                  className="flex-1 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors text-sm sm:text-base"
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           </div>
