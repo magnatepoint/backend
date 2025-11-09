@@ -92,7 +92,7 @@ app.add_middleware(ProxyFixMiddleware)
 # Allow origins from environment or default to localhost for development
 # Production: Set CORS_ORIGINS env var with comma-separated list like:
 # CORS_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:55860,https://mallaapp.org,https://app.mallaapp.org
-default_origins = "http://localhost:5173,http://localhost:3000,http://localhost:55860,https://mallaapp.org,https://app.mallaapp.org,https://frontend.mallaapp.org,https://backend.mallaapp.org,http://backend.mallaapp.org"
+default_origins = "http://localhost:5173,http://localhost:3000,http://localhost:55860,https://mallaapp.org,https://app.mallaapp.org,https://frontend.mallaapp.org,https://backend.mallaapp.org,http://backend.mallaapp.org,https://mvp.monytix.ai,https://f50d8254.monytix.pages.dev"
 # Clean up origins: remove duplicates, trim whitespace, filter empty strings
 raw_origins = os.getenv("CORS_ORIGINS", default_origins).split(",")
 allowed_origins = list(set([origin.strip() for origin in raw_origins if origin.strip()]))
