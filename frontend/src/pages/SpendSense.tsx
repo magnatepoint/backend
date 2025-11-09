@@ -278,7 +278,7 @@ export default function SpendSense() {
 
   // Listen for auth state changes to reload data when user changes
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'USER_UPDATED') {
         // Clear all state and reload data when user changes
         setStats(null)
