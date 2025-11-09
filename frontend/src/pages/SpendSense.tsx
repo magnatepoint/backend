@@ -62,6 +62,10 @@ export default function SpendSense() {
   const [error, setError] = useState<string | null>(null)
   const [period, setPeriod] = useState('month')
   const [searchQuery, setSearchQuery] = useState('')
+  const [sortField, setSortField] = useState<'date' | 'merchant' | 'category' | 'amount'>('date')
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [itemsPerPage, setItemsPerPage] = useState(20)
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null)
   const [editForm, setEditForm] = useState<{
     merchant: string
@@ -302,21 +306,108 @@ export default function SpendSense() {
     }
   }, [loadData])
 
-  // Filter transactions based on search query
-  const filteredTransactions = useMemo(() => {
-    if (!searchQuery.trim()) {
-      return transactions
+  // Filter and sort transactions
+  const filteredAndSortedTransactions = useMemo(() => {
+    // First, filter by search query
+    let filtered = transactions
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase()
+      filtered = transactions.filter((txn) => {
+        const merchant = (txn.merchant_name_norm || txn.merchant || '').toLowerCase()
+        const category = (txn.category_code || txn.category || '').toLowerCase()
+        const amount = String(txn.amount || '').toLowerCase()
+        
+        return merchant.includes(query) || category.includes(query) || amount.includes(query)
+      })
     }
     
-    const query = searchQuery.toLowerCase()
-    return transactions.filter((txn) => {
-      const merchant = (txn.merchant_name_norm || txn.merchant || '').toLowerCase()
-      const category = (txn.category_code || txn.category || '').toLowerCase()
-      const amount = String(txn.amount || '').toLowerCase()
+    // Then, sort
+    const sorted = [...filtered].sort((a, b) => {
+      let aValue: string | number = ''
+      let bValue: string | number = ''
       
-      return merchant.includes(query) || category.includes(query) || amount.includes(query)
+      switch (sortField) {
+        case 'date':
+          aValue = new Date(a.transaction_date || a.txn_date || 0).getTime()
+          bValue = new Date(b.transaction_date || b.txn_date || 0).getTime()
+          break
+        case 'merchant':
+          aValue = (a.merchant_name_norm || a.merchant || '').toLowerCase()
+          bValue = (b.merchant_name_norm || b.merchant || '').toLowerCase()
+          break
+        case 'category':
+          aValue = (a.category_code || a.category || '').toLowerCase()
+          bValue = (b.category_code || b.category || '').toLowerCase()
+          break
+        case 'amount':
+          aValue = Math.abs(Number(a.amount) || 0)
+          bValue = Math.abs(Number(b.amount) || 0)
+          break
+      }
+      
+      if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1
+      if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1
+      return 0
     })
-  }, [transactions, searchQuery])
+    
+    return sorted
+  }, [transactions, searchQuery, sortField, sortDirection])
+
+  // Paginate transactions
+  const paginatedTransactions = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage
+    const endIndex = startIndex + itemsPerPage
+    return filteredAndSortedTransactions.slice(startIndex, endIndex)
+  }, [filteredAndSortedTransactions, currentPage, itemsPerPage])
+
+  const totalPages = Math.ceil(filteredAndSortedTransactions.length / itemsPerPage)
+
+  // Handle column sorting
+  const handleSort = (field: 'date' | 'merchant' | 'category' | 'amount') => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortField(field)
+      setSortDirection('desc')
+    }
+    setCurrentPage(1) // Reset to first page when sorting
+  }
+
+  // Export to CSV
+  const handleExportCSV = () => {
+    if (filteredAndSortedTransactions.length === 0) {
+      showToast('No transactions to export', 'warning')
+      return
+    }
+
+    const headers = ['Date', 'Merchant', 'Category', 'Amount', 'Type']
+    const rows = filteredAndSortedTransactions.map((txn) => {
+      const date = formatDate(txn.transaction_date || txn.txn_date || new Date())
+      const merchant = txn.merchant_name_norm || txn.merchant || 'N/A'
+      const category = txn.category_code || txn.category || 'Uncategorized'
+      const amount = Math.abs(Number(txn.amount) || 0)
+      const type = (txn.direction || txn.transaction_type) === 'credit' ? 'Credit' : 'Debit'
+      
+      return [date, merchant, category, amount.toString(), type]
+    })
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+    ].join('\n')
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    link.setAttribute('href', url)
+    link.setAttribute('download', `transactions_${new Date().toISOString().split('T')[0]}.csv`)
+    link.style.visibility = 'hidden'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    
+    showToast(`Exported ${filteredAndSortedTransactions.length} transactions to CSV`, 'success')
+  }
 
   // Calculate max values for visualizations
   const maxTrendSpending = trends.length > 0 
@@ -550,7 +641,10 @@ export default function SpendSense() {
                 <input
                   type="text"
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value)
+                    setCurrentPage(1) // Reset to first page when searching
+                  }}
                   placeholder="Search transactions..."
                   className="w-full px-4 py-2 pl-10 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-yellow-500 text-sm"
                 />
@@ -563,32 +657,93 @@ export default function SpendSense() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
               </div>
-              <button
-                onClick={() => setShowAddModal(true)}
-                className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-black rounded-lg font-semibold transition-colors text-sm sm:text-base flex items-center gap-2 justify-center whitespace-nowrap"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Add Transaction
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleExportCSV}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors text-sm sm:text-base flex items-center gap-2 justify-center whitespace-nowrap"
+                  title="Export to CSV"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <span className="hidden sm:inline">Export CSV</span>
+                </button>
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-black rounded-lg font-semibold transition-colors text-sm sm:text-base flex items-center gap-2 justify-center whitespace-nowrap"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Add Transaction
+                </button>
+              </div>
             </div>
           </div>
-          {filteredTransactions.length > 0 ? (
-            <div className="overflow-x-auto -mx-4 sm:mx-0">
-              <div className="inline-block min-w-full align-middle">
-                <table className="min-w-full divide-y divide-gray-700">
-                  <thead>
-                    <tr className="border-b border-gray-700">
-                      <th className="text-left py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm">Date</th>
-                      <th className="text-left py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm">Merchant</th>
-                      <th className="text-left py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm hidden sm:table-cell">Category</th>
-                      <th className="text-right py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm">Amount</th>
-                      <th className="text-center py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredTransactions.map((txn, idx) => {
+          {filteredAndSortedTransactions.length > 0 ? (
+            <>
+              <div className="overflow-x-auto -mx-4 sm:mx-0">
+                <div className="inline-block min-w-full align-middle">
+                  <table className="min-w-full divide-y divide-gray-700">
+                    <thead>
+                      <tr className="border-b border-gray-700">
+                        <th 
+                          className="text-left py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm cursor-pointer hover:text-yellow-400 transition-colors"
+                          onClick={() => handleSort('date')}
+                        >
+                          <div className="flex items-center gap-2">
+                            Date
+                            {sortField === 'date' && (
+                              <span className="text-yellow-400">
+                                {sortDirection === 'asc' ? '↑' : '↓'}
+                              </span>
+                            )}
+                          </div>
+                        </th>
+                        <th 
+                          className="text-left py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm cursor-pointer hover:text-yellow-400 transition-colors"
+                          onClick={() => handleSort('merchant')}
+                        >
+                          <div className="flex items-center gap-2">
+                            Merchant
+                            {sortField === 'merchant' && (
+                              <span className="text-yellow-400">
+                                {sortDirection === 'asc' ? '↑' : '↓'}
+                              </span>
+                            )}
+                          </div>
+                        </th>
+                        <th 
+                          className="text-left py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm hidden sm:table-cell cursor-pointer hover:text-yellow-400 transition-colors"
+                          onClick={() => handleSort('category')}
+                        >
+                          <div className="flex items-center gap-2">
+                            Category
+                            {sortField === 'category' && (
+                              <span className="text-yellow-400">
+                                {sortDirection === 'asc' ? '↑' : '↓'}
+                              </span>
+                            )}
+                          </div>
+                        </th>
+                        <th 
+                          className="text-right py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm cursor-pointer hover:text-yellow-400 transition-colors"
+                          onClick={() => handleSort('amount')}
+                        >
+                          <div className="flex items-center justify-end gap-2">
+                            Amount
+                            {sortField === 'amount' && (
+                              <span className="text-yellow-400">
+                                {sortDirection === 'asc' ? '↑' : '↓'}
+                              </span>
+                            )}
+                          </div>
+                        </th>
+                        <th className="text-center py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedTransactions.map((txn, idx) => {
                       const isCredit = (txn.direction || txn.transaction_type) === 'credit'
                       return (
                         <tr 
@@ -657,6 +812,77 @@ export default function SpendSense() {
               </table>
               </div>
             </div>
+            
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-2 text-sm text-gray-400">
+                  <span>Showing</span>
+                  <select
+                    value={itemsPerPage}
+                    onChange={(e) => {
+                      setItemsPerPage(Number(e.target.value))
+                      setCurrentPage(1)
+                    }}
+                    className="px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-yellow-500"
+                  >
+                    <option value={10}>10</option>
+                    <option value={20}>20</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                  <span>of {filteredAndSortedTransactions.length} transactions</span>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                    className="px-3 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors text-sm"
+                  >
+                    Previous
+                  </button>
+                  
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum: number
+                      if (totalPages <= 5) {
+                        pageNum = i + 1
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i
+                      } else {
+                        pageNum = currentPage - 2 + i
+                      }
+                      
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setCurrentPage(pageNum)}
+                          className={`px-3 py-2 rounded-lg text-sm transition-colors ${
+                            currentPage === pageNum
+                              ? 'bg-yellow-500 text-black font-semibold'
+                              : 'bg-gray-700 hover:bg-gray-600 text-white'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                    className="px-3 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors text-sm"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+            </>
           ) : (
             <div className="text-center py-12 text-gray-400">
               {searchQuery ? (
