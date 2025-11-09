@@ -347,6 +347,23 @@ class ApiClient {
     return this.request<PortfolioGoal[] | { goals: PortfolioGoal[] }>(`/api/goals/summary`)
   }
 
+  async createGoal(goal: {
+    goal_category: string
+    goal_name: string
+    goal_type: 'short_term' | 'medium_term' | 'long_term'
+    estimated_cost: number
+    target_date?: string
+    current_savings?: number
+    linked_txn_type?: string
+    notes?: string
+  }) {
+    return this.request<{ goal_id: string }>(`/api/goals/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(goal)
+    })
+  }
+
   async updateGoal(goalId: string, updates: {
     estimated_cost?: number
     current_savings?: number

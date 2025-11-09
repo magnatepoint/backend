@@ -1,9 +1,23 @@
 import { useState } from 'react'
-import { Outlet, Link, useLocation } from 'react-router-dom'
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
+import { supabase } from '../lib/supabase'
 
 export default function Layout() {
   const location = useLocation()
+  const navigate = useNavigate()
   const [isCollapsed, setIsCollapsed] = useState(false)
+
+  const handleSignOut = async () => {
+    try {
+      await supabase.auth.signOut()
+      // Use window.location for a hard redirect to ensure it always works
+      window.location.href = '/login'
+    } catch (error) {
+      console.error('Error signing out:', error)
+      // Still redirect to login even if sign out fails
+      window.location.href = '/login'
+    }
+  }
 
   const navItems = [
     { path: '/', label: 'Monytix Console', icon: 'M' },
@@ -78,7 +92,7 @@ export default function Layout() {
           </ul>
         </nav>
 
-        <div className={`mt-auto pt-4 border-t border-gray-700 ${isCollapsed ? 'px-2' : 'px-6'}`}>
+        <div className={`mt-auto pt-4 border-t border-gray-700 ${isCollapsed ? 'px-2' : 'px-6'} space-y-2`}>
           <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} py-2`}>
             <div className="w-8 h-8 bg-gray-600 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0">
               S
@@ -90,6 +104,34 @@ export default function Layout() {
               </div>
             )}
           </div>
+          <button
+            onClick={handleSignOut}
+            className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-4 py-2 rounded-lg transition-colors text-gray-300 hover:bg-gray-700 hover:text-white group relative`}
+            title={isCollapsed ? 'Sign Out' : undefined}
+          >
+            <svg
+              className="w-5 h-5 flex-shrink-0"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+              />
+            </svg>
+            {!isCollapsed && (
+              <span className="whitespace-nowrap">Sign Out</span>
+            )}
+            {/* Tooltip for collapsed state */}
+            {isCollapsed && (
+              <span className="absolute left-full ml-2 px-2 py-1 bg-gray-700 text-white text-sm rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-20">
+                Sign Out
+              </span>
+            )}
+          </button>
         </div>
       </aside>
 
