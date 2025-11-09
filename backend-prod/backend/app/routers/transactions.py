@@ -366,6 +366,8 @@ async def create_transaction(payload: TransactionCreate, user: UserDep = Depends
 # Read (list)
 # -----------------------
 
+# Handle both with and without trailing slash
+@router.get("", response_model=TransactionListResponse)
 @router.get("/", response_model=TransactionListResponse)
 async def list_transactions(
     user: UserDep = Depends(get_current_user),
