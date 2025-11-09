@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts'
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip as RechartsTooltip } from 'recharts'
 import { apiClient } from '../lib/api'
 import { formatCurrency, formatDate } from '../lib/utils'
 import { supabase } from '../lib/supabase'
 import { useToast } from '../context/ToastContext'
 import { PageSkeleton } from '../components/LoadingSkeleton'
+import { Tooltip } from '../components/Tooltip'
 
 interface SpendingStats {
   period: string
@@ -503,10 +504,17 @@ export default function SpendSense() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-6">
           {/* Enhanced Monthly Trend Chart */}
           {trends.length > 0 && (
-            <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700">
-              <h2 className="text-lg sm:text-xl font-bold mb-4 sm:mb-6 text-yellow-400 flex items-center gap-2">
-                <span>📈</span> Spending Trends (3 Months)
-              </h2>
+            <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700 animate-slide-up hover:border-yellow-500/30 transition-all duration-300">
+              <div className="flex items-center gap-2 mb-4 sm:mb-6">
+                <h2 className="text-lg sm:text-xl font-bold text-yellow-400 flex items-center gap-2">
+                  <span>📈</span> Spending Trends (3 Months)
+                </h2>
+                <Tooltip content="Your spending pattern over the last 3 months" position="right">
+                  <svg className="w-5 h-5 text-gray-400 hover:text-gray-300 cursor-help" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </Tooltip>
+              </div>
               <div className="h-48 sm:h-64 flex items-end gap-1 sm:gap-2 overflow-x-auto">
                 {trends.map((trend, idx) => {
                   const height = maxTrendSpending > 0 ? ((trend.spending || 0) / maxTrendSpending) * 100 : 0
@@ -533,10 +541,17 @@ export default function SpendSense() {
 
           {/* Spending by Category Pie Chart */}
           {byCategory.length > 0 && (
-            <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700">
-              <h2 className="text-lg sm:text-xl font-bold mb-4 sm:mb-6 text-yellow-400 flex items-center gap-2">
-                <span>📂</span> Spending by Category
-              </h2>
+            <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700 animate-slide-up hover:border-yellow-500/30 transition-all duration-300">
+              <div className="flex items-center gap-2 mb-4 sm:mb-6">
+                <h2 className="text-lg sm:text-xl font-bold text-yellow-400 flex items-center gap-2">
+                  <span>📂</span> Spending by Category
+                </h2>
+                <Tooltip content="Breakdown of your spending by category" position="right">
+                  <svg className="w-5 h-5 text-gray-400 hover:text-gray-300 cursor-help" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </Tooltip>
+              </div>
               <div className="w-full">
                 <ResponsiveContainer width="100%" height={300}>
                   <PieChart>
@@ -574,7 +589,7 @@ export default function SpendSense() {
                         )
                       })}
                     </Pie>
-                    <Tooltip
+                    <RechartsTooltip
                       contentStyle={{
                         backgroundColor: '#1f2937',
                         border: '1px solid #374151',
@@ -668,15 +683,17 @@ export default function SpendSense() {
                   </svg>
                   <span className="hidden sm:inline">Export CSV</span>
                 </button>
-                <button
-                  onClick={() => setShowAddModal(true)}
-                  className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-black rounded-lg font-semibold transition-colors text-sm sm:text-base flex items-center gap-2 justify-center whitespace-nowrap"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                  </svg>
-                  Add Transaction
-                </button>
+                <Tooltip content="Add a new transaction manually">
+                  <button
+                    onClick={() => setShowAddModal(true)}
+                    className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-black rounded-lg font-semibold transition-all duration-200 hover:scale-105 active:scale-95 text-sm sm:text-base flex items-center gap-2 justify-center whitespace-nowrap shadow-lg shadow-yellow-500/20"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                    Add Transaction
+                  </button>
+                </Tooltip>
               </div>
             </div>
           </div>
@@ -700,45 +717,51 @@ export default function SpendSense() {
                             )}
                           </div>
                         </th>
-                        <th 
-                          className="text-left py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm cursor-pointer hover:text-yellow-400 transition-colors"
-                          onClick={() => handleSort('merchant')}
-                        >
-                          <div className="flex items-center gap-2">
-                            Merchant
-                            {sortField === 'merchant' && (
-                              <span className="text-yellow-400">
-                                {sortDirection === 'asc' ? '↑' : '↓'}
-                              </span>
-                            )}
-                          </div>
-                        </th>
-                        <th 
-                          className="text-left py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm hidden sm:table-cell cursor-pointer hover:text-yellow-400 transition-colors"
-                          onClick={() => handleSort('category')}
-                        >
-                          <div className="flex items-center gap-2">
-                            Category
-                            {sortField === 'category' && (
-                              <span className="text-yellow-400">
-                                {sortDirection === 'asc' ? '↑' : '↓'}
-                              </span>
-                            )}
-                          </div>
-                        </th>
-                        <th 
-                          className="text-right py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm cursor-pointer hover:text-yellow-400 transition-colors"
-                          onClick={() => handleSort('amount')}
-                        >
-                          <div className="flex items-center justify-end gap-2">
-                            Amount
-                            {sortField === 'amount' && (
-                              <span className="text-yellow-400">
-                                {sortDirection === 'asc' ? '↑' : '↓'}
-                              </span>
-                            )}
-                          </div>
-                        </th>
+                        <Tooltip content="Click to sort by merchant name">
+                          <th 
+                            className="text-left py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm cursor-pointer hover:text-yellow-400 transition-all duration-200"
+                            onClick={() => handleSort('merchant')}
+                          >
+                            <div className="flex items-center gap-2">
+                              Merchant
+                              {sortField === 'merchant' && (
+                                <span className="text-yellow-400 animate-fade-in">
+                                  {sortDirection === 'asc' ? '↑' : '↓'}
+                                </span>
+                              )}
+                            </div>
+                          </th>
+                        </Tooltip>
+                        <Tooltip content="Click to sort by category">
+                          <th 
+                            className="text-left py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm hidden sm:table-cell cursor-pointer hover:text-yellow-400 transition-all duration-200"
+                            onClick={() => handleSort('category')}
+                          >
+                            <div className="flex items-center gap-2">
+                              Category
+                              {sortField === 'category' && (
+                                <span className="text-yellow-400 animate-fade-in">
+                                  {sortDirection === 'asc' ? '↑' : '↓'}
+                                </span>
+                              )}
+                            </div>
+                          </th>
+                        </Tooltip>
+                        <Tooltip content="Click to sort by amount">
+                          <th 
+                            className="text-right py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm cursor-pointer hover:text-yellow-400 transition-all duration-200"
+                            onClick={() => handleSort('amount')}
+                          >
+                            <div className="flex items-center justify-end gap-2">
+                              Amount
+                              {sortField === 'amount' && (
+                                <span className="text-yellow-400 animate-fade-in">
+                                  {sortDirection === 'asc' ? '↑' : '↓'}
+                                </span>
+                              )}
+                            </div>
+                          </th>
+                        </Tooltip>
                         <th className="text-center py-3 px-2 sm:px-4 text-gray-400 font-semibold uppercase text-xs sm:text-sm">Actions</th>
                       </tr>
                     </thead>
