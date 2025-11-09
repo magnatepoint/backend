@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, status
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, status, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.exceptions import RequestValidationError
@@ -6,6 +6,8 @@ from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response
+from typing import Optional, Literal
+from datetime import date
 import uvicorn
 import os
 from config import settings
@@ -162,14 +164,37 @@ from app.routers import categories as categories_router
 # Include routers
 app.include_router(auth_router.router, prefix="/auth", tags=["Authentication"])
 
-# Add redirect route for /api/transactions (without trailing slash) to /api/transactions/
+# Add route for /api/transactions (without trailing slash) that calls the same handler
+# This avoids redirects which cause CORS issues
 @app.get("/api/transactions", include_in_schema=False)
-async def redirect_transactions(request: Request):
-    """Redirect /api/transactions to /api/transactions/ (with trailing slash)"""
-    url = str(request.url)
-    if not url.endswith('/'):
-        return RedirectResponse(url=url + '/', status_code=307)
-    return RedirectResponse(url=url, status_code=307)
+async def list_transactions_no_slash(
+    request: Request,
+    user = Depends(transactions_router.get_current_user),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    category: Optional[str] = None,
+    subcategory: Optional[str] = None,
+    direction: Optional[Literal["debit", "credit"]] = None,
+    sort: Optional[Literal["date_desc","date_asc","amt_desc","amt_asc"]] = "date_desc",
+    search: Optional[str] = None
+):
+    """Handle /api/transactions without trailing slash - calls same handler as /api/transactions/"""
+    # Import here to avoid circular dependency
+    from app.routers.transactions import list_transactions
+    return await list_transactions(
+        user=user,
+        skip=skip,
+        limit=limit,
+        start_date=start_date,
+        end_date=end_date,
+        category=category,
+        subcategory=subcategory,
+        direction=direction,
+        sort=sort,
+        search=search
+    )
 
 app.include_router(transactions_router.router, prefix="/api/transactions", tags=["Transactions"])
 app.include_router(ml_router.router, prefix="/api/ml", tags=["ML"])
