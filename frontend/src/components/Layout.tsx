@@ -23,7 +23,7 @@ export default function Layout() {
     loadUser()
 
     // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user?.email) {
         setUserEmail(session.user.email)
         const initial = session.user.email.charAt(0).toUpperCase()
