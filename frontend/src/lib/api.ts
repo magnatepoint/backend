@@ -26,23 +26,25 @@ class ApiClient {
   }
   
   private async request<T>(endpoint: string, options: RequestInit = {}, retryCount = 0): Promise<T> {
-    // Get token from Supabase session - refresh if needed
+    // Get token from Supabase session
     const { supabase } = await import('./supabase')
     
-    // Get fresh session (this will refresh if needed)
+    // Get current session
     let { data: { session }, error: sessionError } = await supabase.auth.getSession()
     
-    // If no session or error, try to refresh
-    if (!session || sessionError) {
-      const { data: { session: refreshedSession } } = await supabase.auth.refreshSession()
-      session = refreshedSession
+    // If no session, user needs to log in
+    if (!session) {
+      console.warn('No session available. User needs to log in.')
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+      throw new Error('No authentication session available')
     }
     
-    const token = session?.access_token || null
+    const token = session.access_token
     
     if (!token) {
       console.warn('No auth token available. User may need to log in.')
-      // Redirect to login if no token
       if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
         window.location.href = '/login'
       }
@@ -82,11 +84,22 @@ class ApiClient {
         if ((response.status === 401 || response.status === 403) && retryCount === 0) {
           console.log('Token expired or invalid, attempting to refresh...')
           try {
-            // Refresh the session
-            const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession()
+            // Get current session first
+            const { data: { session: currentSession } } = await supabase.auth.getSession()
+            
+            if (!currentSession) {
+              console.error('No session available to refresh')
+              if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+                window.location.href = '/login'
+              }
+              throw new Error('No session available to refresh')
+            }
+            
+            // Refresh the session using the current session
+            const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession(currentSession)
             
             if (refreshedSession?.access_token) {
-              console.log('Token refreshed, retrying request...')
+              console.log('Token refreshed successfully, retrying request...')
               // Retry the request with the new token
               return this.request<T>(endpoint, options, retryCount + 1)
             } else {
