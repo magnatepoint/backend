@@ -981,7 +981,7 @@ async def get_insights(
             target_month = month_row[0]
             
             # Get top 5 categories by spending for that month from materialized view
-            # Exclude credit_cards, investments, loans, transfers, income, others from insights
+            # Include credit_cards, loans, investments (mutual funds) - only exclude transfers and income
             category_rows = session.execute(text(f"""
                 SELECT 
                     i.category_code,
@@ -992,7 +992,7 @@ async def get_insights(
                 LEFT JOIN spendsense.dim_category dc ON dc.category_code = i.category_code
                 WHERE i.user_id = :uid
                 AND i.month = :target_month
-                AND i.category_code NOT IN ('income', 'transfers', 'others', 'credit_cards', 'investments', 'loans')
+                AND i.category_code NOT IN ('income', 'transfers', 'others')
                 AND i.spend_amt > 0
                 ORDER BY i.spend_amt DESC
                 LIMIT 5
@@ -1072,7 +1072,7 @@ async def get_insights(
                 TxnFact.txn_date >= month_start.date(),
                 TxnFact.txn_date <= month_end.date(),
                 TxnFact.direction == 'debit',
-                TxnEnriched.category_code.notin_(['income', 'transfers', 'credit_cards', 'investments', 'loans'])
+                TxnEnriched.category_code.notin_(['income', 'transfers', 'others'])
             ).group_by(TxnEnriched.category_code).order_by(func.sum(func.abs(TxnFact.amount)).desc()).limit(5).all()
 
             insights = []
