@@ -1,5 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from typing import Optional, List, Literal, Tuple
 from datetime import datetime, date
 from decimal import Decimal, ROUND_HALF_UP
@@ -366,15 +365,6 @@ async def create_transaction(payload: TransactionCreate, user: UserDep = Depends
 # -----------------------
 # Read (list)
 # -----------------------
-
-# Redirect /api/transactions to /api/transactions/ (with trailing slash)
-@router.get("", include_in_schema=False)
-async def redirect_transactions(request: Request):
-    """Redirect /api/transactions to /api/transactions/"""
-    url = str(request.url)
-    if not url.endswith('/'):
-        return RedirectResponse(url=url + '/', status_code=307)
-    return RedirectResponse(url=url, status_code=307)
 
 @router.get("/", response_model=TransactionListResponse)
 async def list_transactions(

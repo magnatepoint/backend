@@ -161,6 +161,16 @@ from app.routers import categories as categories_router
 
 # Include routers
 app.include_router(auth_router.router, prefix="/auth", tags=["Authentication"])
+
+# Add redirect route for /api/transactions (without trailing slash) to /api/transactions/
+@app.get("/api/transactions", include_in_schema=False)
+async def redirect_transactions(request: Request):
+    """Redirect /api/transactions to /api/transactions/ (with trailing slash)"""
+    url = str(request.url)
+    if not url.endswith('/'):
+        return RedirectResponse(url=url + '/', status_code=307)
+    return RedirectResponse(url=url, status_code=307)
+
 app.include_router(transactions_router.router, prefix="/api/transactions", tags=["Transactions"])
 app.include_router(ml_router.router, prefix="/api/ml", tags=["ML"])
 app.include_router(uploads_router.router, prefix="/api/upload", tags=["Uploads"])
