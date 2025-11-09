@@ -30,7 +30,7 @@ class ApiClient {
     const { supabase } = await import('./supabase')
     
     // Get current session
-    let { data: { session }, error: sessionError } = await supabase.auth.getSession()
+    const { data: { session } } = await supabase.auth.getSession()
     
     // If no session, user needs to log in
     if (!session) {
