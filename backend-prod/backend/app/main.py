@@ -1,8 +1,11 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import Response
 import uvicorn
 import os
 from config import settings
@@ -46,8 +49,42 @@ app = FastAPI(
     title="Monytix API",
     description="Fintech backend for transaction processing and ML insights",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    root_path=""  # Don't use root_path - let Cloudflare handle it
 )
+
+# Middleware to trust proxy headers and fix redirects
+class ProxyFixMiddleware(BaseHTTPMiddleware):
+    """Middleware to trust proxy headers (X-Forwarded-Proto, etc.) and fix redirects"""
+    async def dispatch(self, request: StarletteRequest, call_next):
+        # Check if request is behind a proxy (Cloudflare)
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+        forwarded_host = request.headers.get("X-Forwarded-Host", "")
+        
+        # If behind Cloudflare with HTTPS, update the request URL scheme
+        if forwarded_proto == "https":
+            # Update the request URL to use HTTPS
+            request.scope["scheme"] = "https"
+            if forwarded_host:
+                request.scope["headers"] = [
+                    (k, v) if k != b"host" else (b"host", forwarded_host.encode())
+                    for k, v in request.scope["headers"]
+                ]
+        
+        response = await call_next(request)
+        
+        # Fix redirects to use HTTPS if behind Cloudflare
+        # Check for Location header in any response (redirects)
+        if forwarded_proto == "https" and "location" in response.headers:
+            location = response.headers["location"]
+            if location.startswith("http://"):
+                # Replace HTTP with HTTPS in redirect location
+                response.headers["location"] = location.replace("http://", "https://", 1)
+        
+        return response
+
+# Add proxy fix middleware BEFORE CORS middleware
+app.add_middleware(ProxyFixMiddleware)
 
 # CORS Middleware
 # Allow origins from environment or default to localhost for development
