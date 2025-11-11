@@ -1135,6 +1135,41 @@ class ApiClient {
       throw error
     }
   }
+
+  async bulkImportTransactions(file: File): Promise<{
+    success: boolean
+    total_rows: number
+    imported: number
+    errors: Array<{ row: number; field: string | null; message: string }>
+  }> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const response = await this.fetchWithAuth('/api/transactions/bulk-import', {
+      method: 'POST',
+      body: formData
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      let message = 'Failed to import transactions'
+
+      if (errorText) {
+        try {
+          const errorData = JSON.parse(errorText) as { detail?: string; message?: string }
+          message = errorData.detail || errorData.message || message
+        } catch {
+          message = errorText
+        }
+      }
+
+      const errorWithStatus = new Error(message) as Error & { status?: number }
+      errorWithStatus.status = response.status
+      throw errorWithStatus
+    }
+
+    return await response.json()
+  }
 }
 
 export const apiClient = new ApiClient(API_BASE_URL)

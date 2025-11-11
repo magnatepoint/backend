@@ -95,6 +95,10 @@ export default function SpendSense() {
     transaction_type: 'debit'
   })
   const [subcategories, setSubcategories] = useState<Array<{ subcategory_code: string; subcategory_name: string }>>([])
+  const [showImportModal, setShowImportModal] = useState(false)
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importErrors, setImportErrors] = useState<Array<{ row: number; field: string | null; message: string }>>([])
+  const [importing, setImporting] = useState(false)
 
   // Load categories for edit form
   useEffect(() => {
@@ -376,40 +380,46 @@ export default function SpendSense() {
     setCurrentPage(1) // Reset to first page when sorting
   }
 
-  // Export to CSV
-  const handleExportCSV = () => {
-    if (filteredAndSortedTransactions.length === 0) {
-      showToast('No transactions to export', 'warning')
+  const handleBulkImport = async () => {
+    if (!importFile) {
+      showToast('Please select a file to import', 'warning')
       return
     }
 
-    const headers = ['Date', 'Merchant', 'Category', 'Amount', 'Type']
-    const rows = filteredAndSortedTransactions.map((txn) => {
-      const date = formatDate(txn.transaction_date || txn.txn_date || new Date())
-      const merchant = txn.merchant_name_norm || txn.merchant || 'N/A'
-      const category = txn.category_code || txn.category || 'Uncategorized'
-      const amount = Math.abs(Number(txn.amount) || 0)
-      const type = (txn.direction || txn.transaction_type) === 'credit' ? 'Credit' : 'Debit'
+    setImporting(true)
+    setImportErrors([])
+
+    try {
+      const result = await apiClient.bulkImportTransactions(importFile)
       
-      return [date, merchant, category, amount.toString(), type]
-    })
+      if (result.success) {
+        showToast(`Successfully imported ${result.imported} transaction(s)`, 'success')
+        setShowImportModal(false)
+        setImportFile(null)
+        loadData() // Reload transactions
+      } else {
+        setImportErrors(result.errors)
+        showToast(`Import failed: ${result.errors.length} error(s) found`, 'error')
+      }
+    } catch (err: any) {
+      console.error('Failed to import transactions:', err)
+      showToast(err.message || 'Failed to import transactions. Please try again.', 'error')
+    } finally {
+      setImporting(false)
+    }
+  }
 
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
-    ].join('\n')
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    const link = document.createElement('a')
-    const url = URL.createObjectURL(blob)
-    link.setAttribute('href', url)
-    link.setAttribute('download', `transactions_${new Date().toISOString().split('T')[0]}.csv`)
-    link.style.visibility = 'hidden'
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    
-    showToast(`Exported ${filteredAndSortedTransactions.length} transactions to CSV`, 'success')
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      const ext = file.name.toLowerCase()
+      if (!ext.endsWith('.xlsx') && !ext.endsWith('.csv')) {
+        showToast('Please select a .xlsx or .csv file', 'warning')
+        return
+      }
+      setImportFile(file)
+      setImportErrors([])
+    }
   }
 
   const handleDownloadTemplate = async () => {
@@ -730,16 +740,16 @@ export default function SpendSense() {
                 </svg>
               </div>
               <div className="flex gap-2">
-                <Tooltip content="Export all filtered transactions to CSV file">
+                <Tooltip content="Import transactions from Excel or CSV file">
                   <button
-                    onClick={handleExportCSV}
+                    onClick={() => setShowImportModal(true)}
                     className="px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-all duration-200 hover:scale-105 active:scale-95 text-sm sm:text-base flex items-center gap-2 justify-center whitespace-nowrap shadow-md"
-                    title="Export to CSV"
+                    title="Import Bulk"
                   >
                     <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                     </svg>
-                    <span className="hidden sm:inline">Export CSV</span>
+                    <span className="hidden sm:inline">Import Bulk</span>
                   </button>
                 </Tooltip>
                 <Tooltip content="Download Excel template for bulk import">
@@ -1222,6 +1232,82 @@ export default function SpendSense() {
                     setEditForm(null)
                   }}
                   className="flex-1 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors text-sm sm:text-base"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Bulk Import Modal */}
+        {showImportModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 sm:p-6">
+            <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+              <h2 className="text-xl sm:text-2xl font-bold mb-4 sm:mb-6 text-yellow-400">Import Bulk Transactions</h2>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Select File (.xlsx or .csv)</label>
+                  <input
+                    type="file"
+                    accept=".xlsx,.csv"
+                    onChange={handleFileSelect}
+                    className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-yellow-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700"
+                  />
+                  {importFile && (
+                    <p className="mt-2 text-sm text-gray-400">Selected: {importFile.name}</p>
+                  )}
+                </div>
+
+                {importErrors.length > 0 && (
+                  <div className="bg-red-900/20 border border-red-500 rounded-lg p-4">
+                    <h3 className="text-red-400 font-semibold mb-2">Import Errors ({importErrors.length})</h3>
+                    <div className="max-h-60 overflow-y-auto space-y-2">
+                      {importErrors.map((error, idx) => (
+                        <div key={idx} className="text-sm text-red-300">
+                          <span className="font-medium">Row {error.row}</span>
+                          {error.field && <span className="text-gray-400"> - {error.field}: </span>}
+                          <span>{error.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="bg-blue-900/20 border border-blue-500 rounded-lg p-4">
+                  <p className="text-sm text-blue-300">
+                    <strong>Note:</strong> Download the template first to ensure correct format. 
+                    All rows must be valid for import to succeed.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 mt-6">
+                <button
+                  onClick={handleBulkImport}
+                  disabled={!importFile || importing}
+                  className="flex-1 px-4 py-2.5 bg-yellow-500 hover:bg-yellow-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-black rounded-lg font-semibold transition-colors text-sm sm:text-base flex items-center justify-center gap-2"
+                >
+                  {importing ? (
+                    <>
+                      <svg className="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Importing...
+                    </>
+                  ) : (
+                    'Import'
+                  )}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowImportModal(false)
+                    setImportFile(null)
+                    setImportErrors([])
+                  }}
+                  disabled={importing}
+                  className="flex-1 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition-colors text-sm sm:text-base"
                 >
                   Cancel
                 </button>

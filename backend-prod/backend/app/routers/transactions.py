@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
 from fastapi.responses import StreamingResponse
 from typing import Optional, List, Literal, Tuple, Dict
 from datetime import datetime, date
@@ -6,9 +6,10 @@ from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 import uuid as _uuid
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
 from openpyxl.worksheet.datavalidation import DataValidation
+import pandas as pd
 from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 
@@ -165,6 +166,17 @@ class TransactionUpdate(BaseModel):
     def u_currency(cls, v: Optional[str]) -> Optional[str]:
         return v.upper() if v else v
 
+class BulkImportError(BaseModel):
+    row: int
+    field: Optional[str] = None
+    message: str
+
+class BulkImportResponse(BaseModel):
+    success: bool
+    total_rows: int
+    imported: int
+    errors: List[BulkImportError]
+
 # =============================================================================
 # Router
 # =============================================================================
@@ -317,6 +329,294 @@ async def download_transaction_template(user: UserDep = Depends(get_current_user
             "Content-Disposition": f'attachment; filename="{filename}"'
         }
     )
+
+
+@router.post("/bulk-import", response_model=BulkImportResponse)
+async def bulk_import_transactions(
+    file: UploadFile = File(...),
+    user: UserDep = Depends(get_current_user)
+):
+    """
+    Bulk import transactions from Excel (.xlsx) or CSV file.
+    Validates all rows before importing. Fails entire upload if any row has errors.
+    """
+    # Validate file type
+    file_ext = file.filename.lower() if file.filename else ""
+    if not (file_ext.endswith('.xlsx') or file_ext.endswith('.csv')):
+        raise HTTPException(
+            status_code=400,
+            detail="Only .xlsx or .csv files are allowed"
+        )
+    
+    # Read file content
+    content = await file.read()
+    if len(content) == 0:
+        raise HTTPException(status_code=400, detail="File is empty")
+    
+    # Parse file based on extension
+    try:
+        if file_ext.endswith('.xlsx'):
+            df = pd.read_excel(BytesIO(content), sheet_name=0, engine='openpyxl')
+        else:  # CSV
+            df = pd.read_csv(BytesIO(content))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse file: {str(e)}")
+    
+    if df.empty:
+        raise HTTPException(status_code=400, detail="File contains no data rows")
+    
+    # Expected columns (case-insensitive matching)
+    expected_cols = [
+        'merchant', 'description', 'amount', 'transaction_date',
+        'transaction_type', 'category_code', 'subcategory_code',
+        'currency', 'bank', 'reference_id', 'tags'
+    ]
+    
+    # Normalize column names (lowercase, strip whitespace)
+    df.columns = df.columns.str.lower().str.strip()
+    
+    # Check required columns
+    required_cols = ['description', 'amount', 'transaction_date', 'transaction_type']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing required columns: {', '.join(missing_cols)}"
+        )
+    
+    session = SessionLocal()
+    errors: List[BulkImportError] = []
+    validated_rows: List[Dict] = []
+    
+    try:
+        # Validate all rows first
+        for idx, row in df.iterrows():
+            row_num = idx + 2  # +2 because Excel rows start at 1 and we skip header
+            
+            try:
+                # Extract and validate fields
+                merchant = str(row.get('merchant', '')).strip() if pd.notna(row.get('merchant')) else ''
+                description = str(row.get('description', '')).strip() if pd.notna(row.get('description')) else ''
+                amount_str = row.get('amount', '')
+                date_str = row.get('transaction_date', '')
+                txn_type_str = str(row.get('transaction_type', '')).strip().lower() if pd.notna(row.get('transaction_type')) else ''
+                category_code = str(row.get('category_code', '')).strip() if pd.notna(row.get('category_code')) else None
+                subcategory_code = str(row.get('subcategory_code', '')).strip() if pd.notna(row.get('subcategory_code')) else None
+                currency = str(row.get('currency', 'INR')).strip().upper() if pd.notna(row.get('currency')) else 'INR'
+                bank = str(row.get('bank', '')).strip() if pd.notna(row.get('bank')) else None
+                reference_id = str(row.get('reference_id', '')).strip() if pd.notna(row.get('reference_id')) else None
+                tags_str = str(row.get('tags', '')).strip() if pd.notna(row.get('tags')) else ''
+                
+                # Validate required fields
+                if not description:
+                    errors.append(BulkImportError(row=row_num, field='description', message='Description is required'))
+                    continue
+                
+                if pd.isna(amount_str) or amount_str == '':
+                    errors.append(BulkImportError(row=row_num, field='amount', message='Amount is required'))
+                    continue
+                
+                try:
+                    amount = Decimal(str(amount_str))
+                    if amount <= 0:
+                        errors.append(BulkImportError(row=row_num, field='amount', message='Amount must be positive'))
+                        continue
+                    amount = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                except (ValueError, TypeError):
+                    errors.append(BulkImportError(row=row_num, field='amount', message=f'Invalid amount: {amount_str}'))
+                    continue
+                
+                if pd.isna(date_str) or date_str == '':
+                    errors.append(BulkImportError(row=row_num, field='transaction_date', message='Transaction date is required'))
+                    continue
+                
+                try:
+                    # Try parsing as datetime string (ISO format or common formats)
+                    if isinstance(date_str, str):
+                        # Try ISO format first
+                        try:
+                            txn_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                        except:
+                            # Try pandas parsing
+                            txn_date = pd.to_datetime(date_str)
+                            if isinstance(txn_date, pd.Timestamp):
+                                txn_date = txn_date.to_pydatetime()
+                    else:
+                        txn_date = pd.to_datetime(date_str).to_pydatetime()
+                except Exception as e:
+                    errors.append(BulkImportError(row=row_num, field='transaction_date', message=f'Invalid date format: {date_str}'))
+                    continue
+                
+                if not txn_type_str or txn_type_str not in ['debit', 'credit']:
+                    errors.append(BulkImportError(row=row_num, field='transaction_type', message='Transaction type must be "debit" or "credit"'))
+                    continue
+                
+                transaction_type = TransactionType.DEBIT if txn_type_str == 'debit' else TransactionType.CREDIT
+                
+                # Validate currency
+                if len(currency) != 3 or not currency.isalpha():
+                    errors.append(BulkImportError(row=row_num, field='currency', message='Currency must be a 3-letter ISO code'))
+                    continue
+                
+                # Validate category/subcategory if provided
+                if category_code or subcategory_code:
+                    try:
+                        cat_code, subcat_code = _ensure_category_pair(session, category_code, subcategory_code)
+                    except HTTPException as e:
+                        errors.append(BulkImportError(row=row_num, field='category_code' if category_code else 'subcategory_code', message=e.detail))
+                        continue
+                else:
+                    cat_code, subcat_code = None, None
+                
+                # Parse tags if provided
+                tags = []
+                if tags_str:
+                    tags = [t.strip() for t in tags_str.split(',') if t.strip()]
+                    if len(tags) > 20:
+                        errors.append(BulkImportError(row=row_num, field='tags', message='Maximum 20 tags allowed'))
+                        continue
+                
+                # Create TransactionCreate object for validation
+                try:
+                    txn_create = TransactionCreate(
+                        amount=amount,
+                        currency=currency,
+                        transaction_date=txn_date,
+                        description=description,
+                        merchant=merchant if merchant else None,
+                        category=cat_code,
+                        subcategory=subcat_code,
+                        bank=bank,
+                        transaction_type=transaction_type,
+                        reference_id=reference_id,
+                        tags=tags
+                    )
+                    validated_rows.append({
+                        'txn_create': txn_create,
+                        'row_num': row_num
+                    })
+                except Exception as e:
+                    errors.append(BulkImportError(row=row_num, field=None, message=f'Validation error: {str(e)}'))
+                    continue
+                    
+            except Exception as e:
+                errors.append(BulkImportError(row=row_num, field=None, message=f'Unexpected error: {str(e)}'))
+                continue
+        
+        # If any errors, return them all without importing
+        if errors:
+            return BulkImportResponse(
+                success=False,
+                total_rows=len(df),
+                imported=0,
+                errors=errors
+            )
+        
+        # All rows validated - now import them
+        from app.models.spendsense_models import UploadBatch
+        user_id_uuid = _uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        
+        # Get or create manual upload batch
+        manual_upload = session.query(UploadBatch).filter(
+            UploadBatch.source_type == 'manual',
+            UploadBatch.user_id == user_id_uuid
+        ).first()
+        
+        if not manual_upload:
+            manual_upload = UploadBatch(
+                user_id=user_id_uuid,
+                source_type='manual',
+                file_name=file.filename or 'bulk_import',
+                status='loaded',
+                total_records=0,
+                parsed_records=0
+            )
+            session.add(manual_upload)
+            session.flush()
+        
+        imported_count = 0
+        for row_data in validated_rows:
+            txn_create = row_data['txn_create']
+            
+            # Validate category/subcategory again (in case DB changed)
+            cat_code, subcat_code = _ensure_category_pair(session, txn_create.category, txn_create.subcategory)
+            direction = _direction_from_type(txn_create.transaction_type)
+            
+            txn = TxnFact(
+                user_id=user_id_uuid,
+                upload_id=manual_upload.upload_id,
+                source_type='manual',
+                account_ref=txn_create.bank,
+                txn_external_id=txn_create.reference_id,
+                txn_date=txn_create.transaction_date.date(),
+                description=txn_create.description,
+                amount=txn_create.amount,
+                direction=direction,
+                currency=txn_create.currency,
+                merchant_name_norm=txn_create.merchant,
+            )
+            
+            session.add(txn)
+            session.flush()
+            
+            if cat_code or subcat_code:
+                session.add(TxnEnriched(
+                    txn_id=txn.txn_id,
+                    category_code=cat_code,
+                    subcategory_code=subcat_code,
+                    rule_confidence=Decimal("0.90")
+                ))
+            
+            # Try to compute dedupe fingerprint
+            try:
+                session.execute(text("""
+                    UPDATE spendsense.txn_fact 
+                    SET dedupe_fp = spendsense.fn_txn_fact_fp(
+                        :user_id, :txn_date, :amount, :direction, 
+                        :description, :merchant, :account_ref
+                    ) 
+                    WHERE txn_id = :txn_id
+                """), {
+                    "txn_id": str(txn.txn_id),
+                    "user_id": str(user_id_uuid),
+                    "txn_date": txn.txn_date,
+                    "amount": float(txn.amount),
+                    "direction": txn.direction,
+                    "description": txn.description or "",
+                    "merchant": txn.merchant_name_norm or "",
+                    "account_ref": txn.account_ref or ""
+                })
+            except Exception:
+                pass  # Non-fatal
+            
+            imported_count += 1
+        
+        session.commit()
+        
+        # Broadcast to websocket clients
+        try:
+            await websocket_manager.broadcast_to_user(user.user_id, {
+                "type": "transactions_bulk_imported",
+                "data": {"count": imported_count}
+            })
+        except Exception:
+            pass  # Non-fatal
+        
+        return BulkImportResponse(
+            success=True,
+            total_rows=len(df),
+            imported=imported_count,
+            errors=[]
+        )
+        
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to import transactions: {str(e)}")
+    finally:
+        session.close()
 
 
 # -----------------------
