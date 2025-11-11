@@ -456,7 +456,10 @@ export default function GoalCompass() {
                         outerRadius={100}
                         fill="#8884d8"
                         dataKey="value"
-                        label={({ name, count }) => `${name} (${count})`}
+                        label={(props: any) => {
+                          const data = props.payload || {}
+                          return `${data.name || ''} (${data.count || 0})`
+                        }}
                       >
                         {pieChartData.map((_, index) => {
                           const colors = ['#fbbf24', '#3b82f6', '#10b981', '#ef4444', '#8b5cf6', '#f59e0b']

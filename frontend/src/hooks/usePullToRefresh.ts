@@ -58,14 +58,14 @@ export function usePullToRefresh({ onRefresh, threshold = 80, enabled = true }: 
     }
 
     const element = elementRef.current || document
-    element.addEventListener('touchstart', handleTouchStart, { passive: true })
-    element.addEventListener('touchmove', handleTouchMove, { passive: false })
-    element.addEventListener('touchend', handleTouchEnd, { passive: true })
+    element.addEventListener('touchstart', handleTouchStart as EventListener, { passive: true })
+    element.addEventListener('touchmove', handleTouchMove as EventListener, { passive: false })
+    element.addEventListener('touchend', handleTouchEnd as EventListener, { passive: true })
 
     return () => {
-      element.removeEventListener('touchstart', handleTouchStart)
-      element.removeEventListener('touchmove', handleTouchMove)
-      element.removeEventListener('touchend', handleTouchEnd)
+      element.removeEventListener('touchstart', handleTouchStart as EventListener)
+      element.removeEventListener('touchmove', handleTouchMove as EventListener)
+      element.removeEventListener('touchend', handleTouchEnd as EventListener)
     }
   }, [onRefresh, threshold, enabled, pullDistance, isRefreshing])
 
