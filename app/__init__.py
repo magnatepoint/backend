@@ -1,2 +1,0 @@
-# Monytix Backend Application
-

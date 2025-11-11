@@ -196,6 +196,15 @@ async def list_transactions_no_slash(
         search=search
     )
 
+@app.post("/api/transactions", include_in_schema=False, status_code=201)
+async def create_transaction_no_slash(
+    payload: transactions_router.TransactionCreate,
+    user: transactions_router.UserDep = Depends(transactions_router.get_current_user)
+):
+    """Handle POST /api/transactions without trailing slash."""
+    from app.routers.transactions import create_transaction
+    return await create_transaction(payload=payload, user=user)
+
 app.include_router(transactions_router.router, prefix="/api/transactions", tags=["Transactions"])
 app.include_router(ml_router.router, prefix="/api/ml", tags=["ML"])
 app.include_router(uploads_router.router, prefix="/api/upload", tags=["Uploads"])
