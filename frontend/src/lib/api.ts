@@ -25,14 +25,11 @@ class ApiClient {
     this.baseUrl = baseUrl
   }
   
-  private async request<T>(endpoint: string, options: RequestInit = {}, retryCount = 0): Promise<T> {
-    // Get token from Supabase session
+  private async fetchWithAuth(endpoint: string, options: RequestInit = {}, retryCount = 0): Promise<Response> {
     const { supabase } = await import('./supabase')
-    
-    // Get current session
+
     const { data: { session } } = await supabase.auth.getSession()
-    
-    // If no session, user needs to log in
+
     if (!session) {
       console.warn('No session available. User needs to log in.')
       if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
@@ -40,9 +37,9 @@ class ApiClient {
       }
       throw new Error('No authentication session available')
     }
-    
+
     const token = session.access_token
-    
+
     if (!token) {
       console.warn('No auth token available. User may need to log in.')
       if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
@@ -50,76 +47,73 @@ class ApiClient {
       }
       throw new Error('No authentication token available')
     }
-    
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...(options.headers as Record<string, string>)
+
+    const existingHeaders = (options.headers as Record<string, string>) || {}
+    const headers: Record<string, string> = { ...existingHeaders }
+
+    const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData
+    if (!headers['Content-Type'] && !isFormData) {
+      headers['Content-Type'] = 'application/json'
     }
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`
-    }
-    
-    // Remove any trailing slashes from endpoint to avoid redirect issues
+
+    headers['Authorization'] = `Bearer ${token}`
+
     const cleanEndpoint = endpoint.replace(/\/+$/, '') || '/'
     let url = `${this.baseUrl}${cleanEndpoint}`
-    
-    // Ensure we're using HTTPS (not HTTP) to avoid redirect issues
-    // Replace HTTP with HTTPS if present
     url = url.replace(/^http:/, 'https:')
-    
+
+    const response = await fetch(url, {
+      ...options,
+      headers,
+      redirect: 'error'
+    })
+
+    if ((response.status === 401 || response.status === 403) && retryCount === 0) {
+      console.log('Token expired or invalid, attempting to refresh...')
+      try {
+        const { data: { session: currentSession } } = await supabase.auth.getSession()
+
+        if (!currentSession) {
+          console.error('No session available to refresh')
+          if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+            window.location.href = '/login'
+          }
+          throw new Error('No session available to refresh')
+        }
+
+        const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession(currentSession)
+
+        if (refreshedSession?.access_token) {
+          console.log('Token refreshed successfully, retrying request...')
+          return this.fetchWithAuth(endpoint, options, retryCount + 1)
+        } else {
+          console.error('Failed to refresh token:', refreshError)
+          if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+            window.location.href = '/login'
+          }
+          throw new Error('Failed to refresh authentication token')
+        }
+      } catch (refreshErr) {
+        console.error('Error refreshing token:', refreshErr)
+        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+          window.location.href = '/login'
+        }
+        throw new Error('Authentication failed. Please log in again.')
+      }
+    }
+
+    return response
+  }
+
+  private async request<T>(endpoint: string, options: RequestInit = {}, retryCount = 0): Promise<T> {
     try {
-      const response = await fetch(url, {
-        ...options,
-        headers,
-        redirect: 'error' // Don't follow redirects - fail if redirect happens
-      })
-      
+      const response = await this.fetchWithAuth(endpoint, options, retryCount)
+
       // Read response text once (can only read body once)
       const contentType = response.headers.get('content-type') || ''
       const text = await response.text()
       
       if (!response.ok) {
-        // Handle 401/403 errors by refreshing token and retrying once
-        if ((response.status === 401 || response.status === 403) && retryCount === 0) {
-          console.log('Token expired or invalid, attempting to refresh...')
-          try {
-            // Get current session first
-            const { data: { session: currentSession } } = await supabase.auth.getSession()
-            
-            if (!currentSession) {
-              console.error('No session available to refresh')
-              if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-                window.location.href = '/login'
-              }
-              throw new Error('No session available to refresh')
-            }
-            
-            // Refresh the session using the current session
-            const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession(currentSession)
-            
-            if (refreshedSession?.access_token) {
-              console.log('Token refreshed successfully, retrying request...')
-              // Retry the request with the new token
-              return this.request<T>(endpoint, options, retryCount + 1)
-            } else {
-              console.error('Failed to refresh token:', refreshError)
-              // Redirect to login if refresh fails
-              if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-                window.location.href = '/login'
-              }
-              throw new Error('Failed to refresh authentication token')
-            }
-          } catch (refreshErr) {
-            console.error('Error refreshing token:', refreshErr)
-            // Redirect to login if refresh fails
-            if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-              window.location.href = '/login'
-            }
-            throw new Error('Authentication failed. Please log in again.')
-          }
-        }
-        
         let errorData: { detail?: string; message?: string }
         if (text) {
           try {
@@ -1108,6 +1102,38 @@ class ApiClient {
       subcategory_name: string
       category_code: string
     }>>(`/api/categories/${categoryCode}/subcategories`)
+  }
+
+  async downloadTransactionTemplate() {
+    try {
+      const response = await this.fetchWithAuth('/api/transactions/template', { method: 'GET' })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        let message = 'Failed to download template'
+
+        if (errorText) {
+          try {
+            const errorData = JSON.parse(errorText) as { detail?: string; message?: string }
+            message = errorData.detail || errorData.message || message
+          } catch {
+            message = errorText
+          }
+        }
+
+        const errorWithStatus = new Error(message) as Error & { status?: number }
+        errorWithStatus.status = response.status
+        throw errorWithStatus
+      }
+
+      return await response.blob()
+    } catch (error) {
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        throw error
+      }
+      console.error('Failed to download transaction template:', error)
+      throw error
+    }
   }
 }
 

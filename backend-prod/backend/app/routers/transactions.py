@@ -1,9 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from typing import Optional, List, Literal, Tuple
+from fastapi.responses import StreamingResponse
+from typing import Optional, List, Literal, Tuple, Dict
 from datetime import datetime, date
 from decimal import Decimal, ROUND_HALF_UP
+from io import BytesIO
 import uuid as _uuid
 
+from openpyxl import Workbook
+from openpyxl.styles import Font
 from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 
@@ -165,6 +169,123 @@ class TransactionUpdate(BaseModel):
 # =============================================================================
 
 router = APIRouter(tags=["Transactions"])  # Prefix handled in main.py
+
+
+@router.get("/template")
+async def download_transaction_template(user: UserDep = Depends(get_current_user)):
+    session = SessionLocal()
+    try:
+        categories = session.query(DimCategory).filter(
+            DimCategory.active.is_(True)
+        ).order_by(
+            DimCategory.display_order.asc(),
+            DimCategory.category_name.asc()
+        ).all()
+
+        subcategories = session.query(DimSubcategory).filter(
+            DimSubcategory.active.is_(True)
+        ).order_by(
+            DimSubcategory.display_order.asc(),
+            DimSubcategory.subcategory_name.asc()
+        ).all()
+
+        categories_data = [
+            {
+                "category_code": cat.category_code,
+                "category_name": cat.category_name,
+                "txn_type": cat.txn_type
+            }
+            for cat in categories
+        ]
+
+        subcategories_data = [
+            {
+                "subcategory_code": sub.subcategory_code,
+                "subcategory_name": sub.subcategory_name,
+                "category_code": sub.category_code
+            }
+            for sub in subcategories
+        ]
+    finally:
+        session.close()
+
+    workbook = Workbook()
+    transactions_sheet = workbook.active
+    transactions_sheet.title = "Transactions"
+
+    headers = [
+        "merchant",
+        "description",
+        "amount",
+        "transaction_date",
+        "transaction_type",
+        "category_code",
+        "subcategory_code",
+        "currency",
+        "bank",
+        "reference_id",
+        "tags"
+    ]
+    transactions_sheet.append(headers)
+
+    header_font = Font(bold=True)
+    for cell in transactions_sheet[1]:
+        cell.font = header_font
+
+    sample_row = [
+        "Example Merchant",
+        "Sample description",
+        2500.00,
+        "2025-01-15T10:30:00Z",
+        "debit",
+        "groceries",
+        "",
+        "INR",
+        "HDFC",
+        "REF123",
+        ""
+    ]
+    transactions_sheet.append(sample_row)
+    transactions_sheet.freeze_panes = "A2"
+
+    reference_sheet = workbook.create_sheet("Categories")
+    reference_headers = [
+        "category_code",
+        "category_name",
+        "subcategory_code",
+        "subcategory_name"
+    ]
+    reference_sheet.append(reference_headers)
+    for cell in reference_sheet[1]:
+        cell.font = header_font
+
+    subcategory_map: Dict[str, List[Dict[str, str]]] = {}
+    for sub in subcategories_data:
+        subcategory_map.setdefault(sub["category_code"], []).append(sub)
+
+    for cat in categories_data:
+        entries = subcategory_map.get(cat["category_code"]) or [None]
+        for sub in entries:
+            reference_sheet.append([
+                cat["category_code"],
+                cat["category_name"],
+                sub["subcategory_code"] if sub else "",
+                sub["subcategory_name"] if sub else ""
+            ])
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+
+    filename = f"transaction_template_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
 
 # -----------------------
 # Helpers

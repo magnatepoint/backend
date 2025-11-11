@@ -412,6 +412,31 @@ export default function SpendSense() {
     showToast(`Exported ${filteredAndSortedTransactions.length} transactions to CSV`, 'success')
   }
 
+  const handleDownloadTemplate = async () => {
+    try {
+      const blob = await apiClient.downloadTransactionTemplate()
+      if (typeof window === 'undefined') {
+        showToast('Download is only available in the browser', 'warning')
+        return
+      }
+
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const dateStr = new Date().toISOString().split('T')[0]
+      link.href = url
+      link.setAttribute('download', `transaction_template_${dateStr}.xlsx`)
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+
+      showToast('Template downloaded successfully', 'success')
+    } catch (err) {
+      console.error('Failed to download transaction template:', err)
+      showToast('Failed to download template. Please try again.', 'error')
+    }
+  }
+
   // Calculate max values for visualizations
   const maxTrendSpending = trends.length > 0 
     ? Math.max(...trends.map(t => t.spending || 0))
@@ -715,6 +740,18 @@ export default function SpendSense() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
                     <span className="hidden sm:inline">Export CSV</span>
+                  </button>
+                </Tooltip>
+                <Tooltip content="Download Excel template for bulk import">
+                  <button
+                    onClick={handleDownloadTemplate}
+                    className="px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition-all duration-200 hover:scale-105 active:scale-95 text-sm sm:text-base flex items-center gap-2 justify-center whitespace-nowrap shadow-md"
+                    title="Download template"
+                  >
+                    <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4" />
+                    </svg>
+                    <span className="hidden sm:inline">Download Template</span>
                   </button>
                 </Tooltip>
                 <Tooltip content="Add a new transaction manually">
