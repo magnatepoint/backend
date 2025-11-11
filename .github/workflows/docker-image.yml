@@ -49,7 +49,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./backend-prod/backend
-          file: Dockerfile
+          file: ./backend-prod/backend/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
