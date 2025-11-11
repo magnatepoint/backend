@@ -8,6 +8,7 @@ import uuid as _uuid
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
+from openpyxl.worksheet.datavalidation import DataValidation
 from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 
@@ -247,6 +248,37 @@ async def download_transaction_template(user: UserDep = Depends(get_current_user
     ]
     transactions_sheet.append(sample_row)
     transactions_sheet.freeze_panes = "A2"
+
+    # Add data validation dropdowns
+    # Transaction type dropdown (column E, index 5)
+    transaction_type_validation = DataValidation(
+        type="list",
+        formula1="debit,credit",
+        allow_blank=True
+    )
+    transaction_type_validation.add("E2:E10000")  # Apply to all rows starting from row 2
+    transactions_sheet.add_data_validation(transaction_type_validation)
+
+    # Category code dropdown (column F, index 6)
+    category_codes = ",".join([cat["category_code"] for cat in categories_data])
+    category_validation = DataValidation(
+        type="list",
+        formula1=category_codes,
+        allow_blank=True
+    )
+    category_validation.add("F2:F10000")
+    transactions_sheet.add_data_validation(category_validation)
+
+    # Subcategory code dropdown (column G, index 7)
+    subcategory_codes = ",".join([sub["subcategory_code"] for sub in subcategories_data if sub["subcategory_code"]])
+    if subcategory_codes:  # Only add if there are subcategories
+        subcategory_validation = DataValidation(
+            type="list",
+            formula1=subcategory_codes,
+            allow_blank=True
+        )
+        subcategory_validation.add("G2:G10000")
+        transactions_sheet.add_data_validation(subcategory_validation)
 
     reference_sheet = workbook.create_sheet("Categories")
     reference_headers = [
