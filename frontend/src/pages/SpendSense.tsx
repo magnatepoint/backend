@@ -107,6 +107,14 @@ export default function SpendSense() {
       .catch(() => setCategories([]))
   }, [])
 
+  // Helper function to get category name from code
+  const getCategoryName = (categoryCode?: string, category?: string): string => {
+    if (!categoryCode && !category) return 'Uncategorized'
+    const code = categoryCode || category
+    const found = categories.find(cat => cat.category_code === code)
+    return found ? found.category_name : (code || 'Uncategorized')
+  }
+
   // Load subcategories when category changes in add form
   useEffect(() => {
     if (addForm.category && showAddModal) {
@@ -885,13 +893,13 @@ export default function SpendSense() {
                             </div>
                             <div className="sm:hidden mt-1">
                               <span className="inline-block bg-gray-700/50 text-gray-300 px-2 py-0.5 rounded text-xs">
-                                {txn.category_code || txn.category || 'Uncategorized'}
+                                {getCategoryName(txn.category_code, txn.category)}
                               </span>
                             </div>
                           </td>
                           <td className="py-3 px-2 sm:px-4 hidden sm:table-cell">
                             <span className="inline-block bg-gray-700/50 text-gray-300 px-2 py-1 rounded text-sm">
-                              {txn.category_code || txn.category || 'Uncategorized'}
+                              {getCategoryName(txn.category_code, txn.category)}
                             </span>
                           </td>
                           <td className={`py-3 px-2 sm:px-4 text-right font-bold text-xs sm:text-sm ${
