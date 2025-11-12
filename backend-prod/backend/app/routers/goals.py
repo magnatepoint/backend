@@ -261,29 +261,6 @@ async def create_user_goal(payload: GoalIntake, user: UserDep = Depends(get_curr
         # Choose cost value
         est_cost = payload.estimated_cost if payload.estimated_cost is not None else payload.target_amount
 
-        # Enforce Emergency Fund existence unless exempt
-        # Skip enforcement if this goal is Emergency Fund itself
-        is_emergency_goal = goal_name.lower().startswith("emergency fund")
-        if not is_emergency_goal:
-            ctx = session.execute(text(
-                "SELECT income_regularity, emergency_opt_out FROM goal.user_life_context WHERE user_id = :u"
-            ), {"u": str(user_uuid)}).mappings().first()
-            income_regularity = ctx["income_regularity"] if ctx else None
-            emergency_opt_out = ctx["emergency_opt_out"] if ctx and ctx["emergency_opt_out"] is not None else False
-            if income_regularity != "very_stable" and not emergency_opt_out:
-                has_emergency = session.execute(text(
-                """
-                SELECT 1
-                FROM goal.user_goals_master ug
-                WHERE ug.user_id = :user_id
-                  AND ug.goal_category = 'Emergency'
-                  AND ug.goal_name ILIKE 'Emergency Fund%'
-                LIMIT 1
-                """
-                ), {"user_id": str(user_uuid)}).scalar() is not None
-                if not has_emergency:
-                    raise HTTPException(status_code=400, detail="Emergency Fund required before adding other goals (or opt out in context)")
-
         result = session.execute(text(
             """
             INSERT INTO goal.user_goals_master (
@@ -393,21 +370,6 @@ async def submit_questionnaire(payload: QuestionnairePayload, user: UserDep = De
                 months = {"short_term": 24, "medium_term": 48, "long_term": 84}.get(goal_type, 36)
                 year_offset = months // 12
                 target_date = date(today.year + year_offset, today.month, min(today.day, 28))
-
-            # Emergency fund prerequisite (skip if emergency itself)
-            is_emergency = g.goal_category == "Emergency" and g.goal_name.lower().startswith("emergency fund")
-            if not is_emergency and ctx.income_regularity != "very_stable" and not (ctx.emergency_opt_out or False):
-                has_emergency = session.execute(text(
-                    """
-                    SELECT 1 FROM goal.user_goals_master
-                    WHERE user_id = :user_id
-                      AND goal_category = 'Emergency'
-                      AND goal_name ILIKE 'Emergency Fund%'
-                    LIMIT 1
-                    """
-                ), {"user_id": str(user_uuid)}).scalar() is not None
-                if not has_emergency:
-                    raise HTTPException(status_code=400, detail="Emergency Fund required before adding other goals (or opt out in context)")
 
             # Insert
             ins = session.execute(text(
