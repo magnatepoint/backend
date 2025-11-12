@@ -251,14 +251,17 @@ async def refresh_goalcompass(
                 detail="GoalCompass tables not found. Please run migration 010_goalcompass_schema_only.sql in Supabase SQL Editor."
             )
         
-        # Default as_of_date to month if not provided
-        as_of_date = payload.as_of_date or payload.month
+        # Default as_of_date/month if not provided
+        month_value = payload.month or date.today().isoformat()
+        as_of_date = payload.as_of_date or month_value
         
         # Section 3.1: Distribute asset contributions
         try:
             session.execute(text("""
                 WITH params AS (
-                    SELECT :user_id::uuid AS p_user_id, :month::date AS p_month
+                    SELECT 
+                        CAST(:user_id AS uuid) AS p_user_id, 
+                        CAST(:month AS date) AS p_month
                 ),
                 m AS (
                     SELECT date_trunc('month', (SELECT p_month FROM params))::date AS month
@@ -290,7 +293,7 @@ async def refresh_goalcompass(
                 SET amount = EXCLUDED.amount, notes = EXCLUDED.notes, created_at = NOW()
             """), {
                 "user_id": str(user_uuid),
-                "month": payload.month
+                "month": month_value
             })
             session.commit()
         except Exception as e:
@@ -309,7 +312,7 @@ async def refresh_goalcompass(
             # No active goals - return early but still success
             return {
                 "message": "GoalCompass refreshed successfully (no active goals found)",
-                "month": payload.month,
+                "month": month_value,
                 "user_id": str(user_uuid),
                 "goals_found": 0
             }
@@ -317,7 +320,10 @@ async def refresh_goalcompass(
         try:
             session.execute(text("""
             WITH params AS (
-                SELECT :user_id::uuid AS p_user_id, :month::date AS p_month, :as_of_date::date AS as_of_date
+                SELECT 
+                    CAST(:user_id AS uuid) AS p_user_id, 
+                    CAST(:month AS date) AS p_month, 
+                    CAST(:as_of_date AS date) AS as_of_date
             ),
             ug AS (
                 SELECT g.*
@@ -422,7 +428,7 @@ async def refresh_goalcompass(
                 computed_at = NOW()
             """), {
                 "user_id": str(user_uuid),
-                "month": payload.month,
+                "month": month_value,
                 "as_of_date": as_of_date
             })
             session.commit()
@@ -444,7 +450,7 @@ async def refresh_goalcompass(
         try:
             session.execute(text("""
             WITH params AS (
-                SELECT :user_id::uuid AS p_user_id, :month::date AS p_month
+                SELECT CAST(:user_id AS uuid) AS p_user_id, CAST(:month AS date) AS p_month
             ),
             latest AS (
                 SELECT s.user_id, s.goal_id, s.month, s.progress_pct
@@ -475,7 +481,7 @@ async def refresh_goalcompass(
                 progress_pct_at_ach = COALESCE(goalcompass.user_goal_milestone_status.progress_pct_at_ach, EXCLUDED.progress_pct_at_ach)
             """), {
                 "user_id": str(user_uuid),
-                "month": payload.month
+                "month": month_value
             })
             session.commit()
         except Exception as e:
@@ -510,7 +516,7 @@ async def refresh_goalcompass(
         
         return {
             "message": "GoalCompass refreshed successfully",
-            "month": payload.month,
+            "month": month_value,
             "user_id": str(user_uuid)
         }
     except HTTPException:
