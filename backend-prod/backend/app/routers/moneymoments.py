@@ -10,6 +10,7 @@ from app.database.postgresql import SessionLocal
 from sqlalchemy import text
 from pydantic import BaseModel
 import uuid
+import json
 
 router = APIRouter()
 
@@ -73,25 +74,27 @@ async def upsert_user_traits(
     user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
     try:
         lifestyle_tags_json = traits.lifestyle_tags or []
+        # Convert list to proper JSON string
+        lifestyle_tags_json_str = json.dumps(lifestyle_tags_json) if lifestyle_tags_json else '[]'
         
         session.execute(text("""
             INSERT INTO moneymoments.mm_user_traits (
                 user_id, age_band, gender, region_code, lifestyle_tags, updated_at
             ) VALUES (
-                :user_id, :age_band, :gender, :region_code, :lifestyle_tags::jsonb, NOW()
+                :user_id, :age_band, :gender, :region_code, CAST(:lifestyle_tags AS jsonb), NOW()
             )
             ON CONFLICT (user_id) DO UPDATE SET
                 age_band = EXCLUDED.age_band,
                 gender = EXCLUDED.gender,
                 region_code = EXCLUDED.region_code,
-                lifestyle_tags = EXCLUDED.lifestyle_tags,
+                lifestyle_tags = CAST(:lifestyle_tags AS jsonb),
                 updated_at = NOW()
         """), {
             "user_id": str(user_uuid),
             "age_band": traits.age_band,
             "gender": traits.gender,
             "region_code": traits.region_code,
-            "lifestyle_tags": str(lifestyle_tags_json).replace("'", '"')
+            "lifestyle_tags": lifestyle_tags_json_str
         })
         
         session.commit()
