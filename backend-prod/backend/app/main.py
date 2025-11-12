@@ -205,6 +205,15 @@ async def create_transaction_no_slash(
     from app.routers.transactions import create_transaction
     return await create_transaction(payload=payload, user=user)
 
+@app.post("/api/goals", include_in_schema=False, status_code=201)
+async def create_goal_no_slash(
+    payload: goals_router.GoalIntake,
+    user: goals_router.UserDep = Depends(goals_router.get_current_user)
+):
+    """Handle POST /api/goals without trailing slash."""
+    from app.routers.goals import create_user_goal
+    return await create_user_goal(payload=payload, user=user)
+
 app.include_router(transactions_router.router, prefix="/api/transactions", tags=["Transactions"])
 app.include_router(ml_router.router, prefix="/api/ml", tags=["ML"])
 app.include_router(uploads_router.router, prefix="/api/upload", tags=["Uploads"])
