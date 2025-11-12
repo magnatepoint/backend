@@ -231,17 +231,35 @@ app.include_router(categories_router.router, prefix="/api", tags=["Categories"])
 @app.options("/{full_path:path}")
 async def options_handler(request: Request, full_path: str):
     """Handle CORS preflight OPTIONS requests explicitly"""
-    origin = request.headers.get("origin")
-    cors_origin = origin if origin in allowed_origins else (allowed_origins[0] if allowed_origins else "*")
+    origin = request.headers.get("origin", "")
+    
+    # Check if origin is in allowed list (case-insensitive check for safety)
+    cors_origin = None
+    if origin:
+        # Normalize origin (remove trailing slash, lowercase comparison)
+        origin_normalized = origin.rstrip("/")
+        for allowed in allowed_origins:
+            if allowed.rstrip("/").lower() == origin_normalized.lower():
+                cors_origin = origin
+                break
+    
+    # If no match found, use first allowed origin or "*" (but "*" doesn't work with credentials)
+    if not cors_origin:
+        cors_origin = allowed_origins[0] if allowed_origins else "*"
+    
+    # Get requested headers from Access-Control-Request-Headers
+    requested_headers = request.headers.get("access-control-request-headers", "*")
     
     return JSONResponse(
         content={},
+        status_code=200,
         headers={
             "Access-Control-Allow-Origin": cors_origin,
             "Access-Control-Allow-Credentials": "true",
             "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-            "Access-Control-Max-Age": "3600"
+            "Access-Control-Allow-Headers": requested_headers if requested_headers else "*",
+            "Access-Control-Max-Age": "3600",
+            "Vary": "Origin"
         }
     )
 
