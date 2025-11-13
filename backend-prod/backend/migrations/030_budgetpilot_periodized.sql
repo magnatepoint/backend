@@ -205,7 +205,7 @@ BEGIN
   SELECT gen_random_uuid(), p_user, date_trunc('month', p_start)::date, c.plan_code,
          c.needs_budget_pct, c.wants_budget_pct, c.savings_budget_pct, c.score, c.recommendation_reason, now(), pid
   FROM chosen c
-  ON CONFLICT (user_id, month, plan_code)
+  ON CONFLICT ON CONSTRAINT user_budget_recommendation_user_id_month_plan_code_key
   DO UPDATE SET
      needs_budget_pct=EXCLUDED.needs_budget_pct,
      wants_budget_pct=EXCLUDED.wants_budget_pct,
