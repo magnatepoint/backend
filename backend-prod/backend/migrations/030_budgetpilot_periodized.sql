@@ -51,6 +51,11 @@ ALTER TABLE budgetpilot.user_budget_commit              ADD COLUMN IF NOT EXISTS
 ALTER TABLE budgetpilot.user_budget_commit_goal_alloc   ADD COLUMN IF NOT EXISTS period_id UUID;
 ALTER TABLE budgetpilot.budget_user_month_aggregate     ADD COLUMN IF NOT EXISTS period_id UUID;
 
+ALTER TABLE budgetpilot.user_budget_recommendation DROP CONSTRAINT IF EXISTS fk_ubr_period;
+ALTER TABLE budgetpilot.user_budget_commit DROP CONSTRAINT IF EXISTS fk_ubc_period;
+ALTER TABLE budgetpilot.user_budget_commit_goal_alloc DROP CONSTRAINT IF EXISTS fk_ubcga_period;
+ALTER TABLE budgetpilot.budget_user_month_aggregate DROP CONSTRAINT IF EXISTS fk_buma_period;
+
 ALTER TABLE budgetpilot.user_budget_recommendation
   ADD CONSTRAINT fk_ubr_period FOREIGN KEY (period_id) REFERENCES budgetpilot.budget_period(period_id) ON DELETE CASCADE;
 ALTER TABLE budgetpilot.user_budget_commit
