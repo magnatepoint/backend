@@ -260,10 +260,6 @@ export default function BudgetPilot() {
     loadData()
   }, [loadData])
 
-  const handleCommit = async () => {
-    await loadData()
-  }
-
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-6 md:p-8">
       <div className="max-w-7xl mx-auto">
