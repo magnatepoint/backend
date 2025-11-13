@@ -285,11 +285,12 @@ BEGIN
     FROM weights w JOIN weights w2 USING (user_id)
   )
   INSERT INTO budgetpilot.user_budget_commit_goal_alloc (user_id, month, goal_id, weight_pct, planned_amount, created_at, period_id)
-  SELECT n.user_id,
+  SELECT norm.user_id,
          (SELECT date_trunc('month', period_start)::date FROM budgetpilot.budget_period WHERE period_id=p_period_id),
-         n.goal_id, n.weight_pct,
-         ROUND(COALESCE(income_env,0) * COALESCE(v_alloc_assets_pct,0) * n.weight_pct, 2),
+         norm.goal_id, norm.weight_pct,
+         ROUND(COALESCE(income_env,0) * COALESCE(v_alloc_assets_pct,0) * norm.weight_pct, 2),
          now(), p_period_id
+  FROM norm
   ON CONFLICT (user_id, month, goal_id) DO UPDATE
   SET weight_pct=EXCLUDED.weight_pct,
       planned_amount=EXCLUDED.planned_amount,
