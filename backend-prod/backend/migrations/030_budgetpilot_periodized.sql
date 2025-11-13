@@ -317,13 +317,13 @@ BEGIN
   -- Shares per category within each band from last 90 days
   WITH hist AS (
     SELECT
-      CASE WHEN txn_type IN ('needs','wants','assets') THEN txn_type ELSE NULL END AS band,
+      CASE WHEN v.txn_type IN ('needs','wants','assets') THEN v.txn_type ELSE NULL END AS band,
       COALESCE(dc.category_name, v.category_code, 'Uncategorized') AS category,
-      SUM(CASE WHEN direction='debit' THEN amount ELSE 0 END) AS amt
+      SUM(CASE WHEN v.direction='debit' THEN v.amount ELSE 0 END) AS amt
     FROM spendsense.vw_txn_effective v
     LEFT JOIN spendsense.dim_category dc ON dc.category_code = v.category_code
-    WHERE user_id=p_user
-      AND txn_date >= (s - INTERVAL '90 days') AND txn_date < s
+    WHERE v.user_id=p_user
+      AND v.txn_date >= (s - INTERVAL '90 days') AND v.txn_date < s
     GROUP BY 1, COALESCE(dc.category_name, v.category_code, 'Uncategorized')
   ),
   band_env AS (
