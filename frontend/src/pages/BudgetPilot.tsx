@@ -9,6 +9,68 @@ import PeriodPicker from '../components/PeriodPicker'
 
 type PeriodType = 'monthly' | 'quarterly' | 'custom'
 
+const STORAGE_KEY = 'budgetpilot:period-state'
+
+const computeCurrentMonthRange = () => {
+  const now = new Date()
+  const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+  const end = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`
+  return { start, end }
+}
+
+const readStoredPeriod = (): {
+  periodId: string
+  periodType: PeriodType
+  periodStart: string
+  periodEnd: string
+} => {
+  if (typeof window === 'undefined') {
+    const { start, end } = computeCurrentMonthRange()
+    return { periodId: '', periodType: 'monthly', periodStart: start, periodEnd: end }
+  }
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    if (!raw) {
+      const { start, end } = computeCurrentMonthRange()
+      return { periodId: '', periodType: 'monthly', periodStart: start, periodEnd: end }
+    }
+    const parsed = JSON.parse(raw)
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'periodType' in parsed &&
+      'periodStart' in parsed &&
+      'periodEnd' in parsed
+    ) {
+      return {
+        periodId: typeof parsed.periodId === 'string' ? parsed.periodId : '',
+        periodType: parsed.periodType as PeriodType,
+        periodStart: parsed.periodStart as string,
+        periodEnd: parsed.periodEnd as string
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to read stored BudgetPilot period state', err)
+  }
+  const { start, end } = computeCurrentMonthRange()
+  return { periodId: '', periodType: 'monthly', periodStart: start, periodEnd: end }
+}
+
+const persistPeriod = (state: {
+  periodId: string
+  periodType: PeriodType
+  periodStart: string
+  periodEnd: string
+}) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+  } catch (err) {
+    console.warn('Failed to persist BudgetPilot period state', err)
+  }
+}
+
 interface Overview {
   user_id: string
   period_id: string
@@ -45,10 +107,12 @@ interface CategoryItem {
 }
 
 export default function BudgetPilot() {
-  const [periodId, setPeriodId] = useState<string>('')
-  const [periodType, setPeriodType] = useState<PeriodType>('monthly')
-  const [periodStart, setPeriodStart] = useState<string>('')
-  const [periodEnd, setPeriodEnd] = useState<string>('')
+  const initial = readStoredPeriod()
+
+  const [periodId, setPeriodId] = useState<string>(initial.periodId)
+  const [periodType, setPeriodType] = useState<PeriodType>(initial.periodType)
+  const [periodStart, setPeriodStart] = useState<string>(initial.periodStart)
+  const [periodEnd, setPeriodEnd] = useState<string>(initial.periodEnd)
   
   const [overview, setOverview] = useState<Overview | null>(null)
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
@@ -61,16 +125,6 @@ export default function BudgetPilot() {
   const [computing, setComputing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Initialize period dates
-  useEffect(() => {
-    const now = new Date()
-    const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-    const end = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`
-    setPeriodStart(start)
-    setPeriodEnd(end)
-  }, [])
-
   const handlePeriodChange = (type: PeriodType, start: string, end: string) => {
     setPeriodType(type)
     setPeriodStart(start)
@@ -82,12 +136,27 @@ export default function BudgetPilot() {
     setCategories([])
   }
 
+  useEffect(() => {
+    persistPeriod({
+      periodId,
+      periodType,
+      periodStart,
+      periodEnd
+    })
+  }, [periodId, periodType, periodStart, periodEnd])
+
   const handleCreatePeriod = async () => {
     try {
       setCreatingPeriod(true)
       setError(null)
       const result = await apiClient.upsertPeriod(periodType, periodStart, periodEnd)
       setPeriodId(result.period_id)
+      persistPeriod({
+        periodId: result.period_id,
+        periodType,
+        periodStart,
+        periodEnd
+      })
     } catch (err: unknown) {
       console.error('Error creating period:', err)
       const errorMessage = err instanceof Error ? err.message : 'Failed to create period'
@@ -110,6 +179,12 @@ export default function BudgetPilot() {
       // Update period ID if returned
       if (result.items.length > 0 && result.items[0].period_id) {
         setPeriodId(result.items[0].period_id)
+        persistPeriod({
+          periodId: result.items[0].period_id,
+          periodType,
+          periodStart,
+          periodEnd
+        })
       }
     } catch (err: unknown) {
       console.error('Error generating recommendations:', err)
@@ -249,6 +324,8 @@ export default function BudgetPilot() {
           <PeriodPicker
             onPeriodChange={handlePeriodChange}
             defaultType={periodType}
+            selectedStart={periodStart}
+            selectedEnd={periodEnd}
           />
         </div>
 

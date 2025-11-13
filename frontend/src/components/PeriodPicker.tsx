@@ -1,23 +1,50 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 type PeriodType = 'monthly' | 'quarterly' | 'custom'
 
 interface PeriodPickerProps {
   onPeriodChange: (type: PeriodType, start: string, end: string) => void
   defaultType?: PeriodType
+  selectedStart?: string
+  selectedEnd?: string
 }
 
-export default function PeriodPicker({ onPeriodChange, defaultType = 'monthly' }: PeriodPickerProps) {
-  const [periodType, setPeriodType] = useState<PeriodType>(defaultType)
-  const [customStart, setCustomStart] = useState<string>(() => {
+const computeDefaultStart = () => {
     const now = new Date()
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-  })
-  const [customEnd, setCustomEnd] = useState<string>(() => {
+}
+
+const computeDefaultEnd = () => {
     const now = new Date()
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0)
     return `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`
-  })
+}
+
+export default function PeriodPicker({
+  onPeriodChange,
+  defaultType = 'monthly',
+  selectedStart,
+  selectedEnd
+}: PeriodPickerProps) {
+  const [periodType, setPeriodType] = useState<PeriodType>(defaultType)
+  const [customStart, setCustomStart] = useState<string>(selectedStart ?? computeDefaultStart())
+  const [customEnd, setCustomEnd] = useState<string>(selectedEnd ?? computeDefaultEnd())
+
+  useEffect(() => {
+    setPeriodType(defaultType)
+  }, [defaultType])
+
+  useEffect(() => {
+    if (selectedStart) {
+      setCustomStart(selectedStart)
+    }
+  }, [selectedStart])
+
+  useEffect(() => {
+    if (selectedEnd) {
+      setCustomEnd(selectedEnd)
+    }
+  }, [selectedEnd])
 
   const handleTypeChange = (type: PeriodType) => {
     setPeriodType(type)
@@ -102,8 +129,11 @@ export default function PeriodPicker({ onPeriodChange, defaultType = 'monthly' }
 
       {periodType !== 'custom' && (
         <div className="text-xs text-gray-400 mt-2">
-          {periodType === 'monthly' && 'Current month period'}
-          {periodType === 'quarterly' && 'Current quarter period'}
+          <span className="block">
+            Selected range: {(selectedStart ?? customStart)} → {(selectedEnd ?? customEnd)}
+          </span>
+          {periodType === 'monthly' && <span>Current month period</span>}
+          {periodType === 'quarterly' && <span>Current quarter period</span>}
         </div>
       )}
     </div>
