@@ -197,6 +197,7 @@ BEGIN
     (reco_id, user_id, month, plan_code, needs_budget_pct, wants_budget_pct, savings_budget_pct, score, recommendation_reason, created_at, period_id)
   SELECT gen_random_uuid(), p_user, date_trunc('month', p_start)::date, c.plan_code,
          c.needs_budget_pct, c.wants_budget_pct, c.savings_budget_pct, c.score, c.recommendation_reason, now(), pid
+  FROM chosen c
   ON CONFLICT (user_id, month, plan_code)
   DO UPDATE SET
      needs_budget_pct=EXCLUDED.needs_budget_pct,
@@ -204,8 +205,14 @@ BEGIN
      savings_budget_pct=EXCLUDED.savings_budget_pct,
      score=EXCLUDED.score,
      recommendation_reason=EXCLUDED.recommendation_reason,
-     period_id=EXCLUDED.period_id
-  RETURNING plan_code, score, needs_budget_pct, wants_budget_pct, savings_budget_pct, recommendation_reason, period_id;
+     period_id=EXCLUDED.period_id;
+  
+  -- Return the recommendations
+  RETURN QUERY
+  SELECT r.plan_code, r.score, r.needs_budget_pct, r.wants_budget_pct, r.savings_budget_pct, r.recommendation_reason, r.period_id
+  FROM budgetpilot.user_budget_recommendation r
+  WHERE r.user_id = p_user AND r.period_id = pid
+  ORDER BY r.score DESC, r.plan_code ASC;
 END; $$ LANGUAGE plpgsql;
 
 -- 7) Commit from recommendation (periodized, frozen plan)
@@ -299,12 +306,13 @@ BEGIN
   WITH hist AS (
     SELECT
       CASE WHEN txn_type IN ('needs','wants','assets') THEN txn_type ELSE NULL END AS band,
-      COALESCE(major_category, 'Uncategorized') AS category,
+      COALESCE(dc.category_name, v.category_code, 'Uncategorized') AS category,
       SUM(CASE WHEN direction='debit' THEN amount ELSE 0 END) AS amt
-    FROM spendsense.vw_txn_effective
+    FROM spendsense.vw_txn_effective v
+    LEFT JOIN spendsense.dim_category dc ON dc.category_code = v.category_code
     WHERE user_id=p_user
       AND txn_date >= (s - INTERVAL '90 days') AND txn_date < s
-    GROUP BY 1,2
+    GROUP BY 1, COALESCE(dc.category_name, v.category_code, 'Uncategorized')
   ),
   band_env AS (
     SELECT 'needs' AS band, ROUND(income_env * COALESCE(pct_needs,0),2) AS env_amt UNION ALL
@@ -336,7 +344,7 @@ CREATE OR REPLACE FUNCTION budgetpilot.compute_period_aggregate(
   p_user uuid, p_period_id uuid
 ) RETURNS VOID AS $$
 DECLARE s DATE; e DATE; inc NUMERIC;
-DECLARE needs_amt NUMERIC; DECLARE wants_amt NUMERIC; DECLARE assets_amt NUMERIC;
+DECLARE v_needs_amt NUMERIC; DECLARE v_wants_amt NUMERIC; DECLARE v_assets_amt NUMERIC;
 DECLARE pctn NUMERIC; DECLARE pctw NUMERIC; DECLARE pcta NUMERIC;
 BEGIN
   SELECT period_start, period_end INTO s, e FROM budgetpilot.budget_period WHERE period_id=p_period_id;
@@ -350,9 +358,9 @@ BEGIN
     FROM spendsense.vw_txn_effective
     WHERE user_id=p_user AND txn_date >= s AND txn_date <= e
   )
-  SELECT COALESCE(income_amt,0), COALESCE(needs_amt,0), COALESCE(wants_amt,0), COALESCE(assets_amt,0)
-  INTO inc, needs_amt, wants_amt, assets_amt
-  FROM actuals;
+  SELECT COALESCE(a.income_amt,0), COALESCE(a.needs_amt,0), COALESCE(a.wants_amt,0), COALESCE(a.assets_amt,0)
+  INTO inc, v_needs_amt, v_wants_amt, v_assets_amt
+  FROM actuals a;
 
   SELECT alloc_needs_pct, alloc_wants_pct, alloc_assets_pct
     INTO pctn, pctw, pcta
@@ -368,9 +376,9 @@ BEGIN
   )
   VALUES (
     p_user, date_trunc('month', s)::date, inc,
-    COALESCE(needs_amt,0), ROUND(inc * COALESCE(pctn,0),2), ROUND(COALESCE(needs_amt,0)  - ROUND(inc * COALESCE(pctn,0),2),2),
-    COALESCE(wants_amt,0), ROUND(inc * COALESCE(pctw,0),2), ROUND(COALESCE(wants_amt,0)  - ROUND(inc * COALESCE(pctw,0),2),2),
-    COALESCE(assets_amt,0),ROUND(inc * COALESCE(pcta,0),2), ROUND(COALESCE(assets_amt,0) - ROUND(inc * COALESCE(pcta,0),2),2),
+    COALESCE(v_needs_amt,0), ROUND(inc * COALESCE(pctn,0),2), ROUND(COALESCE(v_needs_amt,0)  - ROUND(inc * COALESCE(pctn,0),2),2),
+    COALESCE(v_wants_amt,0), ROUND(inc * COALESCE(pctw,0),2), ROUND(COALESCE(v_wants_amt,0)  - ROUND(inc * COALESCE(pctw,0),2),2),
+    COALESCE(v_assets_amt,0),ROUND(inc * COALESCE(pcta,0),2), ROUND(COALESCE(v_assets_amt,0) - ROUND(inc * COALESCE(pcta,0),2),2),
     now(), p_period_id
   )
   ON CONFLICT (user_id, month) DO UPDATE
@@ -391,7 +399,7 @@ END; $$ LANGUAGE plpgsql;
 -- 10) Overview view (periodized)
 CREATE OR REPLACE VIEW budgetpilot.v_budget_overview AS
 SELECT 
-  buma.user_id,
+  bp.user_id,
   bp.period_id,
   bp.label AS period_label,
   COALESCE(buma.income_amt,0) AS income,
@@ -406,9 +414,9 @@ SELECT
   COALESCE(buma.variance_assets_amt,0) AS assets_variance,
   ubc.plan_code,
   bpm.name AS plan_name
-FROM budgetpilot.budget_user_month_aggregate buma
-JOIN budgetpilot.budget_period bp ON bp.period_id = buma.period_id
-LEFT JOIN budgetpilot.user_budget_commit ubc ON ubc.user_id=buma.user_id AND ubc.period_id=buma.period_id
+FROM budgetpilot.budget_period bp
+LEFT JOIN budgetpilot.budget_user_month_aggregate buma ON buma.period_id = bp.period_id AND buma.user_id = bp.user_id
+LEFT JOIN budgetpilot.user_budget_commit ubc ON ubc.user_id=bp.user_id AND ubc.period_id=bp.period_id
 LEFT JOIN budgetpilot.budget_plan_master bpm ON bpm.plan_code = ubc.plan_code;
 
 COMMIT;
