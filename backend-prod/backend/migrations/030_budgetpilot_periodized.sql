@@ -12,13 +12,37 @@ CREATE TABLE IF NOT EXISTS budgetpilot.budget_period (
   period_type TEXT NOT NULL CHECK (period_type IN ('monthly','quarterly','custom')),
   period_start DATE NOT NULL,
   period_end   DATE NOT NULL,
-  label TEXT GENERATED ALWAYS AS (
-    CONCAT(upper(left(period_type,1)), ': ', to_char(period_start,'YYYY-MM-DD'),' → ',to_char(period_end,'YYYY-MM-DD'))
-  ) STORED,
+  label TEXT,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (user_id, period_type, period_start, period_end),
   CHECK (period_end >= period_start)
 );
+
+-- Function to generate period label (immutable)
+CREATE OR REPLACE FUNCTION budgetpilot.generate_period_label(
+  p_type TEXT, p_start DATE, p_end DATE
+) RETURNS TEXT AS $$
+BEGIN
+  RETURN UPPER(LEFT(p_type, 1)) || ': ' || 
+         TO_CHAR(p_start, 'YYYY-MM-DD') || ' → ' || 
+         TO_CHAR(p_end, 'YYYY-MM-DD');
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+-- Trigger to auto-populate label
+CREATE OR REPLACE FUNCTION budgetpilot.set_period_label()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.label := budgetpilot.generate_period_label(NEW.period_type, NEW.period_start, NEW.period_end);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_set_period_label
+  BEFORE INSERT OR UPDATE OF period_type, period_start, period_end
+  ON budgetpilot.budget_period
+  FOR EACH ROW
+  EXECUTE FUNCTION budgetpilot.set_period_label();
 
 -- Backfill columns for periodized model (keep month for compatibility for now)
 ALTER TABLE budgetpilot.user_budget_recommendation      ADD COLUMN IF NOT EXISTS period_id UUID;
