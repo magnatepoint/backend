@@ -1,4 +1,5 @@
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts'
+import type { PieLabelRenderProps } from 'recharts'
 import { motion } from 'framer-motion'
 
 interface AllocationData {
@@ -43,7 +44,11 @@ export default function AllocationDonut({ data, title = 'Budget Allocation' }: A
             cx="50%"
             cy="50%"
             labelLine={false}
-            label={({ name, percent }: { name: string; percent?: number }) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
+            label={(props: PieLabelRenderProps) => {
+              const { name, percent } = props
+              if (!name) return ''
+              return `${name} ${(((percent ?? 0)) * 100).toFixed(0)}%`
+            }}
             outerRadius={70}
             fill="#8884d8"
             dataKey="value"
