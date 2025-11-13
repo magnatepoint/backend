@@ -848,7 +848,13 @@ export default function SpendSense() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-6">
           {/* Enhanced Monthly Trend Chart */}
           {trends.length > 0 && (
-            <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700 animate-slide-up hover:border-yellow-500/30 transition-all duration-300">
+            <motion.div
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.3 }}
+              whileHover={{ scale: 1.01 }}
+              className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700 animate-slide-up hover:border-yellow-500/30 transition-all duration-300"
+            >
               <div className="flex items-center gap-2 mb-4 sm:mb-6">
                 <h2 className="text-lg sm:text-xl font-bold text-yellow-400 flex items-center gap-2">
                   <span>📈</span> Spending Trends (3 Months)
@@ -885,7 +891,13 @@ export default function SpendSense() {
 
           {/* Spending by Category Pie Chart */}
           {byCategory.length > 0 && (
-            <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700 animate-slide-up hover:border-yellow-500/30 transition-all duration-300">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.3 }}
+              whileHover={{ scale: 1.01 }}
+              className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700 animate-slide-up hover:border-yellow-500/30 transition-all duration-300"
+            >
               <div className="flex items-center gap-2 mb-4 sm:mb-6">
                 <h2 className="text-lg sm:text-xl font-bold text-yellow-400 flex items-center gap-2">
                   <span>📂</span> Spending by Category
@@ -1487,7 +1499,7 @@ export default function SpendSense() {
               )}
             </div>
           )}
-        </div>
+        </motion.div>
 
         {/* Add Transaction Modal */}
         {showAddModal && (
