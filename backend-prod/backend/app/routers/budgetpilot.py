@@ -495,3 +495,252 @@ async def get_goal_allocations(
     finally:
         session.close()
 
+
+# ============================================================================
+# Periodized Budget Endpoints (from migration 030)
+# ============================================================================
+
+class PeriodUpsert(BaseModel):
+    period_type: str  # 'monthly' | 'quarterly' | 'custom'
+    period_start: str  # 'YYYY-MM-DD'
+    period_end: str    # 'YYYY-MM-DD'
+
+
+class RecommendationRequest(BaseModel):
+    period_type: str
+    period_start: str
+    period_end: str
+
+
+class PeriodCommitRequest(BaseModel):
+    period_id: str
+    plan_code: str
+    notes: Optional[str] = "Committed from suggestions"
+
+
+class PeriodOnly(BaseModel):
+    period_id: str
+
+
+@router.post("/periods/upsert")
+async def upsert_period(
+    body: PeriodUpsert,
+    user: UserDep = Depends(get_current_user)
+):
+    """Create or update a budget period"""
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        
+        result = session.execute(text(
+            "SELECT budgetpilot.upsert_period(:user_id, :period_type, :period_start, :period_end) AS period_id"
+        ), {
+            "user_id": str(user_uuid),
+            "period_type": body.period_type,
+            "period_start": body.period_start,
+            "period_end": body.period_end
+        })
+        
+        period_id = result.scalar()
+        session.commit()
+        
+        return {"period_id": str(period_id)}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to upsert period: {str(e)}")
+    finally:
+        session.close()
+
+
+@router.post("/recommendations/generate")
+async def generate_recommendations_periodized(
+    body: RecommendationRequest,
+    user: UserDep = Depends(get_current_user)
+):
+    """Generate budget recommendations for a period"""
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        
+        result = session.execute(text("""
+            SELECT plan_code, score, needs_budget_pct, wants_budget_pct, savings_budget_pct,
+                   recommendation_reason, period_id
+            FROM budgetpilot.generate_recommendations(:user_id, :period_type, :period_start, :period_end)
+            ORDER BY score DESC, plan_code ASC
+        """), {
+            "user_id": str(user_uuid),
+            "period_type": body.period_type,
+            "period_start": body.period_start,
+            "period_end": body.period_end
+        })
+        
+        items = []
+        for row in result:
+            items.append({
+                "plan_code": row.plan_code,
+                "score": float(row.score) if row.score else 0,
+                "needs_budget_pct": float(row.needs_budget_pct) if row.needs_budget_pct else 0,
+                "wants_budget_pct": float(row.wants_budget_pct) if row.wants_budget_pct else 0,
+                "savings_budget_pct": float(row.savings_budget_pct) if row.savings_budget_pct else 0,
+                "recommendation_reason": row.recommendation_reason,
+                "period_id": str(row.period_id) if row.period_id else None
+            })
+        
+        return {"items": items}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to generate recommendations: {str(e)}")
+    finally:
+        session.close()
+
+
+@router.post("/commit/period")
+async def commit_from_recommendation_periodized(
+    body: PeriodCommitRequest,
+    user: UserDep = Depends(get_current_user)
+):
+    """Commit a budget plan from recommendations"""
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        period_uuid = uuid.UUID(body.period_id) if isinstance(body.period_id, str) else body.period_id
+        
+        session.execute(text(
+            "SELECT budgetpilot.commit_from_recommendation(:user_id, :period_id, :plan_code, :notes)"
+        ), {
+            "user_id": str(user_uuid),
+            "period_id": str(period_uuid),
+            "plan_code": body.plan_code,
+            "notes": body.notes
+        })
+        
+        session.commit()
+        return {"ok": True, "message": "Plan committed successfully"}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to commit plan: {str(e)}")
+    finally:
+        session.close()
+
+
+@router.post("/categories/autofill")
+async def autofill_categories(
+    body: PeriodOnly,
+    user: UserDep = Depends(get_current_user)
+):
+    """Auto-fill category budgets based on historical spending"""
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        period_uuid = uuid.UUID(body.period_id) if isinstance(body.period_id, str) else body.period_id
+        
+        session.execute(text(
+            "SELECT budgetpilot.autofill_category_budgets(:user_id, :period_id)"
+        ), {
+            "user_id": str(user_uuid),
+            "period_id": str(period_uuid)
+        })
+        
+        session.commit()
+        return {"ok": True, "message": "Category budgets autofilled successfully"}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to autofill categories: {str(e)}")
+    finally:
+        session.close()
+
+
+@router.post("/aggregate/compute")
+async def compute_aggregate(
+    body: PeriodOnly,
+    user: UserDep = Depends(get_current_user)
+):
+    """Compute period aggregate (actuals vs plan)"""
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        period_uuid = uuid.UUID(body.period_id) if isinstance(body.period_id, str) else body.period_id
+        
+        session.execute(text(
+            "SELECT budgetpilot.compute_period_aggregate(:user_id, :period_id)"
+        ), {
+            "user_id": str(user_uuid),
+            "period_id": str(period_uuid)
+        })
+        
+        session.commit()
+        return {"ok": True, "message": "Aggregate computed successfully"}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to compute aggregate: {str(e)}")
+    finally:
+        session.close()
+
+
+@router.get("/overview")
+async def get_overview(
+    period_id: str = Query(..., description="Period ID"),
+    user: UserDep = Depends(get_current_user)
+):
+    """Get budget overview for a period"""
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        period_uuid = uuid.UUID(period_id) if isinstance(period_id, str) else period_id
+        
+        result = session.execute(text("""
+            SELECT * FROM budgetpilot.v_budget_overview 
+            WHERE user_id = :user_id AND period_id = :period_id
+        """), {
+            "user_id": str(user_uuid),
+            "period_id": str(period_uuid)
+        }).mappings().first()
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="Overview not found")
+        
+        return dict(result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch overview: {str(e)}")
+    finally:
+        session.close()
+
+
+@router.get("/categories/period")
+async def get_categories_period(
+    period_id: str = Query(..., description="Period ID"),
+    user: UserDep = Depends(get_current_user)
+):
+    """Get category budgets for a period"""
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        period_uuid = uuid.UUID(period_id) if isinstance(period_id, str) else period_id
+        
+        result = session.execute(text("""
+            SELECT band, category, planned_pct, planned_amount
+            FROM budgetpilot.user_budget_category_commit
+            WHERE user_id = :user_id AND period_id = :period_id
+            ORDER BY band, category
+        """), {
+            "user_id": str(user_uuid),
+            "period_id": str(period_uuid)
+        })
+        
+        items = []
+        for row in result:
+            items.append({
+                "band": row.band,
+                "category": row.category,
+                "planned_pct": float(row.planned_pct) if row.planned_pct else 0,
+                "planned_amount": float(row.planned_amount) if row.planned_amount else 0
+            })
+        
+        return {"items": items}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch categories: {str(e)}")
+    finally:
+        session.close()
+

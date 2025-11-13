@@ -805,6 +805,88 @@ class ApiClient {
     }>>(`/api/budgetpilot/goal-allocations${params}`)
   }
 
+  // Periodized BudgetPilot APIs (from migration 030)
+  async upsertPeriod(periodType: string, periodStart: string, periodEnd: string) {
+    return this.request<{ period_id: string }>(`/api/budgetpilot/periods/upsert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ period_type: periodType, period_start: periodStart, period_end: periodEnd })
+    })
+  }
+
+  async generateRecommendationsPeriodized(periodType: string, periodStart: string, periodEnd: string) {
+    return this.request<{
+      items: Array<{
+        plan_code: string
+        score: number
+        needs_budget_pct: number
+        wants_budget_pct: number
+        savings_budget_pct: number
+        recommendation_reason: string
+        period_id: string | null
+      }>
+    }>(`/api/budgetpilot/recommendations/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ period_type: periodType, period_start: periodStart, period_end: periodEnd })
+    })
+  }
+
+  async commitFromRecommendation(periodId: string, planCode: string, notes?: string) {
+    return this.request<{ ok: boolean; message: string }>(`/api/budgetpilot/commit/period`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ period_id: periodId, plan_code: planCode, notes })
+    })
+  }
+
+  async autofillCategories(periodId: string) {
+    return this.request<{ ok: boolean; message: string }>(`/api/budgetpilot/categories/autofill`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ period_id: periodId })
+    })
+  }
+
+  async computeAggregate(periodId: string) {
+    return this.request<{ ok: boolean; message: string }>(`/api/budgetpilot/aggregate/compute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ period_id: periodId })
+    })
+  }
+
+  async getBudgetOverview(periodId: string) {
+    return this.request<{
+      user_id: string
+      period_id: string
+      period_label: string
+      income: number
+      needs_spent: number
+      wants_spent: number
+      assets_spent: number
+      needs_plan: number
+      wants_plan: number
+      assets_plan: number
+      needs_variance: number
+      wants_variance: number
+      assets_variance: number
+      plan_code: string | null
+      plan_name: string | null
+    }>(`/api/budgetpilot/overview?period_id=${periodId}`)
+  }
+
+  async getCategoryBudgets(periodId: string) {
+    return this.request<{
+      items: Array<{
+        band: 'needs' | 'wants' | 'assets'
+        category: string
+        planned_pct: number
+        planned_amount: number
+      }>
+    }>(`/api/budgetpilot/categories/period?period_id=${periodId}`)
+  }
+
   // GoalCompass APIs
   async getGoalProgress(goalId?: string, month?: string) {
     const params = new URLSearchParams()
