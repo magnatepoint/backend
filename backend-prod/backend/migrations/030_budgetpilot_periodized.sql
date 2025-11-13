@@ -95,6 +95,7 @@ BEGIN NEW.updated_at = now(); RETURN NEW; END $$ LANGUAGE plpgsql;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname='budget_plan_master') THEN
+    DROP TRIGGER IF EXISTS trg_bpm_touch ON budgetpilot.budget_plan_master;
     CREATE TRIGGER trg_bpm_touch BEFORE UPDATE ON budgetpilot.budget_plan_master
     FOR EACH ROW EXECUTE FUNCTION budgetpilot.touch_updated_at();
   END IF;
