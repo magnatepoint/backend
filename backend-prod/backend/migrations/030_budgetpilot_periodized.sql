@@ -38,6 +38,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_set_period_label ON budgetpilot.budget_period;
 CREATE TRIGGER trg_set_period_label
   BEFORE INSERT OR UPDATE OF period_type, period_start, period_end
   ON budgetpilot.budget_period
