@@ -200,19 +200,30 @@ BEGIN
            END AS recommendation_reason
     FROM scores s
   )
-  INSERT INTO budgetpilot.user_budget_recommendation
-    (reco_id, user_id, month, plan_code, needs_budget_pct, wants_budget_pct, savings_budget_pct, score, recommendation_reason, created_at, period_id)
-  SELECT gen_random_uuid(), p_user, date_trunc('month', p_start)::date, c.plan_code,
-         c.needs_budget_pct, c.wants_budget_pct, c.savings_budget_pct, c.score, c.recommendation_reason, now(), pid
-  FROM chosen c
-  ON CONFLICT ON CONSTRAINT user_budget_recommendation_user_id_month_plan_code_key
-  DO UPDATE SET
-     needs_budget_pct=EXCLUDED.needs_budget_pct,
-     wants_budget_pct=EXCLUDED.wants_budget_pct,
-     savings_budget_pct=EXCLUDED.savings_budget_pct,
-     score=EXCLUDED.score,
-     recommendation_reason=EXCLUDED.recommendation_reason,
-     period_id=EXCLUDED.period_id;
+  PERFORM 1
+  FROM budgetpilot.user_budget_recommendation r
+  WHERE r.user_id = p_user AND r.period_id = pid;
+
+  IF FOUND THEN
+    UPDATE budgetpilot.user_budget_recommendation r
+    SET needs_budget_pct = c.needs_budget_pct,
+        wants_budget_pct = c.wants_budget_pct,
+        savings_budget_pct = c.savings_budget_pct,
+        score = c.score,
+        recommendation_reason = c.recommendation_reason,
+        period_id = pid,
+        created_at = now()
+    FROM chosen c
+    WHERE r.user_id = p_user
+      AND r.month = date_trunc('month', p_start)::date
+      AND r.plan_code = c.plan_code;
+  ELSE
+    INSERT INTO budgetpilot.user_budget_recommendation
+      (reco_id, user_id, month, plan_code, needs_budget_pct, wants_budget_pct, savings_budget_pct, score, recommendation_reason, created_at, period_id)
+    SELECT gen_random_uuid(), p_user, date_trunc('month', p_start)::date, c.plan_code,
+           c.needs_budget_pct, c.wants_budget_pct, c.savings_budget_pct, c.score, c.recommendation_reason, now(), pid
+    FROM chosen c;
+  END IF;
   
   -- Return the recommendations
   RETURN QUERY
