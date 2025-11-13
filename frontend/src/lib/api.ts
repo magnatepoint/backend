@@ -27,9 +27,9 @@ class ApiClient {
   
   private async fetchWithAuth(endpoint: string, options: RequestInit = {}, retryCount = 0): Promise<Response> {
     const { supabase } = await import('./supabase')
-
+    
     const { data: { session } } = await supabase.auth.getSession()
-
+    
     if (!session) {
       console.warn('No session available. User needs to log in.')
       if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
@@ -37,9 +37,9 @@ class ApiClient {
       }
       throw new Error('No authentication session available')
     }
-
+    
     const token = session.access_token
-
+    
     if (!token) {
       console.warn('No auth token available. User may need to log in.')
       if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
@@ -47,7 +47,7 @@ class ApiClient {
       }
       throw new Error('No authentication token available')
     }
-
+    
     const existingHeaders = (options.headers as Record<string, string>) || {}
     const headers: Record<string, string> = { ...existingHeaders }
 
@@ -55,53 +55,53 @@ class ApiClient {
     if (!headers['Content-Type'] && !isFormData) {
       headers['Content-Type'] = 'application/json'
     }
-
-    headers['Authorization'] = `Bearer ${token}`
-
+    
+      headers['Authorization'] = `Bearer ${token}`
+    
     const cleanEndpoint = endpoint.replace(/\/+$/, '') || '/'
     let url = `${this.baseUrl}${cleanEndpoint}`
     url = url.replace(/^http:/, 'https:')
-
-    const response = await fetch(url, {
-      ...options,
-      headers,
+    
+      const response = await fetch(url, {
+        ...options,
+        headers,
       redirect: 'error'
-    })
-
-    if ((response.status === 401 || response.status === 403) && retryCount === 0) {
-      console.log('Token expired or invalid, attempting to refresh...')
-      try {
-        const { data: { session: currentSession } } = await supabase.auth.getSession()
-
-        if (!currentSession) {
-          console.error('No session available to refresh')
-          if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-            window.location.href = '/login'
-          }
-          throw new Error('No session available to refresh')
-        }
-
-        const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession(currentSession)
-
-        if (refreshedSession?.access_token) {
-          console.log('Token refreshed successfully, retrying request...')
+      })
+      
+        if ((response.status === 401 || response.status === 403) && retryCount === 0) {
+          console.log('Token expired or invalid, attempting to refresh...')
+          try {
+            const { data: { session: currentSession } } = await supabase.auth.getSession()
+            
+            if (!currentSession) {
+              console.error('No session available to refresh')
+              if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+                window.location.href = '/login'
+              }
+              throw new Error('No session available to refresh')
+            }
+            
+            const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession(currentSession)
+            
+            if (refreshedSession?.access_token) {
+              console.log('Token refreshed successfully, retrying request...')
           return this.fetchWithAuth(endpoint, options, retryCount + 1)
-        } else {
-          console.error('Failed to refresh token:', refreshError)
-          if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-            window.location.href = '/login'
+            } else {
+              console.error('Failed to refresh token:', refreshError)
+              if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+                window.location.href = '/login'
+              }
+              throw new Error('Failed to refresh authentication token')
+            }
+          } catch (refreshErr) {
+            console.error('Error refreshing token:', refreshErr)
+            if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+              window.location.href = '/login'
+            }
+            throw new Error('Authentication failed. Please log in again.')
           }
-          throw new Error('Failed to refresh authentication token')
         }
-      } catch (refreshErr) {
-        console.error('Error refreshing token:', refreshErr)
-        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-          window.location.href = '/login'
-        }
-        throw new Error('Authentication failed. Please log in again.')
-      }
-    }
-
+        
     return response
   }
 
@@ -317,6 +317,160 @@ class ApiClient {
       week_change_percentage: number
       month_change_percentage: number
     }>('/api/spendsense/comparing-periods')
+  }
+
+  // Next-Gen Intelligence Layer APIs
+  async getAISpendingAdvice() {
+    return this.request<{
+      advice: Array<{
+        category: string
+        category_name: string
+        change_percentage: number
+        current_spend: number
+        message: string
+        potential_savings: number
+        severity: 'high' | 'medium'
+      }>
+    }>('/api/spendsense/ai/advice')
+  }
+
+  async detectAnomalies(thresholdZscore: number = 2.5) {
+    return this.request<{
+      anomalies: Array<{
+        txn_id: string
+        merchant: string
+        amount: number
+        date: string
+        category: string
+        category_name: string
+        zscore: number
+        message: string
+      }>
+      threshold_zscore: number
+    }>(`/api/spendsense/anomalies?threshold_zscore=${thresholdZscore}`)
+  }
+
+  async getCategoryTrends(months: number = 6) {
+    return this.request<{
+      period_months: number
+      categories: Array<{
+        category: string
+        category_name: string
+        change_percentage: number
+        trend: string
+        data: Array<{
+          month: string
+          spend: number
+        }>
+      }>
+    }>(`/api/spendsense/category-trends?months=${months}`)
+  }
+
+  async getIncomeExpenseOverlay(months: number = 6) {
+    return this.request<{
+      period_months: number
+      data: Array<{
+        month: string
+        income: number
+        expenses: number
+        net_savings: number
+        cumulative_savings: number
+      }>
+    }>(`/api/spendsense/income-expense?months=${months}`)
+  }
+
+  async getBudgetDeviation(periodId?: string) {
+    const url = periodId 
+      ? `/api/spendsense/budget-deviation?period_id=${periodId}`
+      : '/api/spendsense/budget-deviation'
+    return this.request<{
+      period_id?: string
+      deviations: Array<{
+        band: string
+        category: string
+        planned: number
+        actual: number
+        variance: number
+        variance_percentage: number
+        message: string
+      }>
+      message?: string
+    }>(url)
+  }
+
+  async getGoalImpact() {
+    return this.request<{
+      goals: Array<{
+        goal_id: string
+        goal_name: string
+        target_amount: number
+        current_amount: number
+        progress_percentage: number
+        target_date: string | null
+        impact_message: string
+      }>
+      message?: string
+    }>('/api/spendsense/goal-impact')
+  }
+
+  async getCashFlowProjection(monthsAhead: number = 1) {
+    return this.request<{
+      current_balance: number
+      average_monthly_income: number
+      average_monthly_expenses: number
+      projections: Array<{
+        month: string
+        projected_income: number
+        projected_expenses: number
+        projected_balance: number
+        net_flow: number
+      }>
+      projection?: null
+      message?: string
+    }>(`/api/spendsense/cashflow-projection?months_ahead=${monthsAhead}`)
+  }
+
+  async getSpendingForecast(months: number = 6) {
+    return this.request<{
+      period: {
+        start: string
+        end: string
+        next_month: string | null
+      }
+      forecasts: Array<{
+        category: string
+        category_name: string
+        predicted_amount: number
+        last_amount: number
+        change_percentage: number
+        method: string
+        confidence: number
+        data_points: number
+      }>
+    }>(`/api/spendsense/forecast?months=${months}`)
+  }
+
+  async getMerchantMetrics(limit: number = 10, lookbackMonths: number = 3) {
+    return this.request<{
+      period: {
+        start: string
+        end: string
+        previous_start?: string
+        previous_end?: string
+      }
+      merchants: Array<{
+        merchant: string
+        total_spending: number
+        transaction_count: number
+        average_ticket: number
+        daily_frequency: number
+        last_transaction: string | null
+        first_transaction: string | null
+        top_category: string
+        merchant_type: string
+        trend_percentage: number
+      }>
+    }>(`/api/spendsense/merchant-metrics?limit=${limit}&lookback_months=${lookbackMonths}`)
   }
 
   // Goals APIs

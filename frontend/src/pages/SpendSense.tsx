@@ -8,6 +8,18 @@ import { PageSkeleton } from '../components/LoadingSkeleton'
 import { Tooltip } from '../components/Tooltip'
 import { usePullToRefresh } from '../hooks/usePullToRefresh'
 import { SwipeableRow } from '../components/SwipeableRow'
+import { SpendingCoach } from '../components/spendsense/SpendingCoach'
+import { AnomalyDetector } from '../components/spendsense/AnomalyDetector'
+import { CategoryTrendChart } from '../components/spendsense/CategoryTrendChart'
+import { IncomeExpenseChart } from '../components/spendsense/IncomeExpenseChart'
+import { BudgetDeviation } from '../components/spendsense/BudgetDeviation'
+import { GoalImpact } from '../components/spendsense/GoalImpact'
+import { CashFlowProjection } from '../components/spendsense/CashFlowProjection'
+import { MerchantAnalytics } from '../components/spendsense/MerchantAnalytics'
+import { FilterChips, PaymentMode, MerchantType } from '../components/spendsense/FilterChips'
+import { CategoryDrilldownModal } from '../components/spendsense/CategoryDrilldownModal'
+import { Milestones } from '../components/spendsense/Milestones'
+import { motion } from 'framer-motion'
 
 interface SpendingStats {
   period: string
@@ -43,8 +55,10 @@ interface Transaction {
   transaction_type?: 'credit' | 'debit'
   category?: string
   category_code?: string
+  description?: string
   transaction_date?: string
   txn_date?: string
+  tags?: string[]
 }
 
 interface InsightData {
@@ -52,6 +66,92 @@ interface InsightData {
   category: string
   change_percentage: number
   message: string
+}
+
+type TransactionWithMeta = Transaction & {
+  paymentMode: string
+  merchantType: string
+  locationLabel: string
+}
+
+const KNOWN_CITIES = [
+  'bangalore',
+  'bengaluru',
+  'mumbai',
+  'delhi',
+  'gurgaon',
+  'hyderabad',
+  'chennai',
+  'pune',
+  'kolkata',
+  'ahmedabad',
+  'kochi',
+  'jaipur'
+]
+
+const merchantTypeMap: Record<string, string> = {
+  groceries: 'Essential Retail',
+  food_dining: 'Food & Dining',
+  dining_out: 'Food & Dining',
+  entertainment: 'Lifestyle',
+  shopping: 'Retail',
+  transport: 'Transport & Travel',
+  utilities: 'Bills & Utilities',
+  housing_fixed: 'Housing',
+  medical: 'Healthcare',
+  fitness: 'Wellness',
+  education: 'Education',
+  income: 'Income',
+  wants: 'Lifestyle',
+  needs: 'Essentials',
+  assets: 'Assets & Investing'
+}
+
+const inferPaymentMode = (txn: Transaction): string => {
+  const text = `${txn.description || ''} ${txn.merchant || ''} ${txn.merchant_name_norm || ''}`.toLowerCase()
+  if (text.includes('upi') || text.includes('gpay') || text.includes('phonepe') || text.includes('paytm')) {
+    return 'UPI'
+  }
+  if (text.includes('visa') || text.includes('master') || text.includes('card') || text.includes('debit') || text.includes('credit')) {
+    return 'Card'
+  }
+  if (text.includes('neft') || text.includes('rtgs') || text.includes('imps') || text.includes('bank transfer')) {
+    return 'Bank'
+  }
+  if (text.includes('cash') || text.includes('atm')) {
+    return 'Cash'
+  }
+  return 'Other'
+}
+
+const inferMerchantType = (txn: Transaction): string => {
+  const categoryCode = (txn.category_code || txn.category || '').toLowerCase()
+  if (merchantTypeMap[categoryCode]) {
+    return merchantTypeMap[categoryCode]
+  }
+  if (categoryCode.includes('food') || categoryCode.includes('dining')) {
+    return 'Food & Dining'
+  }
+  if (categoryCode.includes('travel') || categoryCode.includes('transport')) {
+    return 'Transport & Travel'
+  }
+  if (categoryCode.includes('shopping') || categoryCode.includes('retail')) {
+    return 'Retail'
+  }
+  return 'General'
+}
+
+const inferLocation = (txn: Transaction): string => {
+  const text = `${txn.description || ''} ${txn.merchant || ''} ${txn.merchant_name_norm || ''}`.toLowerCase()
+  for (const city of KNOWN_CITIES) {
+    if (text.includes(city)) {
+      return city
+        .split(' ')
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ')
+    }
+  }
+  return 'Unknown'
 }
 
 export default function SpendSense() {
@@ -99,6 +199,54 @@ export default function SpendSense() {
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importErrors, setImportErrors] = useState<Array<{ row: number; field: string | null; message: string }>>([])
   const [importing, setImporting] = useState(false)
+  
+  // Next-gen intelligence layer state
+  const [activeTab, setActiveTab] = useState<'overview' | 'intelligence' | 'analytics' | 'budget' | 'goals'>('overview')
+  const [aiAdvice, setAiAdvice] = useState<any[]>([])
+  const [anomalies, setAnomalies] = useState<any[]>([])
+  const [categoryTrends, setCategoryTrends] = useState<any>(null)
+  const [incomeExpense, setIncomeExpense] = useState<any>(null)
+  const [budgetDeviation, setBudgetDeviation] = useState<any>(null)
+  const [goalImpact, setGoalImpact] = useState<any>(null)
+  const [cashFlowProjection, setCashFlowProjection] = useState<any>(null)
+  const [merchantAnalytics, setMerchantAnalytics] = useState<any[]>([])
+  const [loadingIntelligence, setLoadingIntelligence] = useState(false)
+  
+  // Filter and drilldown state
+  const [drilldownCategory, setDrilldownCategory] = useState<{ category: string; categoryName: string } | null>(null)
+  const [milestones, setMilestones] = useState<any[]>([])
+  const [forecastData, setForecastData] = useState<{ forecasts: any[]; period?: any } | null>(null)
+  const [paymentModeFilter, setPaymentModeFilter] = useState<string[]>([])
+  const [merchantTypeFilter, setMerchantTypeFilter] = useState<string[]>([])
+  const [locationFilter, setLocationFilter] = useState<string[]>([])
+  const [hasShownInsightsToast, setHasShownInsightsToast] = useState(false)
+
+  const handleTabChange = (tab: 'overview' | 'intelligence' | 'analytics' | 'budget' | 'goals') => {
+    setActiveTab(tab)
+    setHasShownInsightsToast(false)
+  }
+
+  const toggleFilterValue = (value: string, setter: React.Dispatch<React.SetStateAction<string[]>>) => {
+    setter((prev) => (prev.includes(value) ? prev.filter((entry) => entry !== value) : [...prev, value]))
+  }
+
+  const clearAllFilters = () => {
+    setPaymentModeFilter([])
+    setMerchantTypeFilter([])
+    setLocationFilter([])
+  }
+
+  const handleCategoryDrilldown = (categoryCode: string, displayName: string) => {
+    const normalizedCode = (categoryCode || '').toLowerCase()
+    const matching = transactionsWithMeta.filter((txn) => {
+      const txnCode = (txn.category_code || txn.category || '').toLowerCase()
+      return txnCode === normalizedCode
+    })
+    setDrilldownCategory({
+      category: categoryCode,
+      categoryName: displayName
+    })
+  }
 
   // Load categories for edit form
   useEffect(() => {
@@ -302,6 +450,117 @@ export default function SpendSense() {
     loadData()
   }, [loadData])
 
+  const transactionsWithMeta = useMemo<TransactionWithMeta[]>(() => {
+    return transactions.map((txn) => {
+      const paymentMode = inferPaymentMode(txn)
+      const merchantType = inferMerchantType(txn)
+      const locationLabel = inferLocation(txn)
+      return { ...txn, paymentMode, merchantType, locationLabel }
+    })
+  }, [transactions])
+
+  const paymentModeOptions = useMemo(() => {
+    const counts: Record<string, number> = {}
+    transactionsWithMeta.forEach((txn) => {
+      counts[txn.paymentMode] = (counts[txn.paymentMode] || 0) + 1
+    })
+    return Object.entries(counts)
+      .map(([value, count]) => ({
+        label: value,
+        value,
+        count
+      }))
+      .sort((a, b) => b.count - a.count)
+  }, [transactionsWithMeta])
+
+  const merchantTypeOptions = useMemo(() => {
+    const counts: Record<string, number> = {}
+    transactionsWithMeta.forEach((txn) => {
+      counts[txn.merchantType] = (counts[txn.merchantType] || 0) + 1
+    })
+    return Object.entries(counts)
+      .map(([value, count]) => ({
+        label: value,
+        value,
+        count
+      }))
+      .sort((a, b) => b.count - a.count)
+  }, [transactionsWithMeta])
+
+  const locationOptions = useMemo(() => {
+    const counts: Record<string, number> = {}
+    transactionsWithMeta.forEach((txn) => {
+      counts[txn.locationLabel] = (counts[txn.locationLabel] || 0) + 1
+    })
+    return Object.entries(counts)
+      .map(([value, count]) => ({
+        label: value,
+        value,
+        count
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6)
+  }, [transactionsWithMeta])
+
+  const pieChartData = useMemo(() => {
+    return byCategory.map((cat) => ({
+      name: getCategoryName(cat.category, cat.category),
+      categoryCode: cat.category,
+      value: cat.amount,
+      percentage: cat.percentage
+    }))
+  }, [byCategory, categories])
+
+  // Load intelligence layer data
+  const loadIntelligenceData = useCallback(async () => {
+    setLoadingIntelligence(true)
+    try {
+      const [
+        adviceData,
+        anomaliesData,
+        trendsData,
+        incomeExpenseData,
+        budgetData,
+        goalsData,
+        cashflowData,
+        forecastDataRes,
+        merchantMetricsData
+      ] = await Promise.all([
+        apiClient.getAISpendingAdvice().catch(() => ({ advice: [] })),
+        apiClient.detectAnomalies().catch(() => ({ anomalies: [] })),
+        apiClient.getCategoryTrends(6).catch(() => ({ categories: [] })),
+        apiClient.getIncomeExpenseOverlay(6).catch(() => ({ data: [] })),
+        apiClient.getBudgetDeviation().catch(() => ({ deviations: [] })),
+        apiClient.getGoalImpact().catch(() => ({ goals: [] })),
+        apiClient.getCashFlowProjection(3).catch(() => ({ projections: [] })),
+        apiClient.getSpendingForecast(6).catch(() => ({ forecasts: [] })),
+        apiClient.getMerchantMetrics(10, 3).catch(() => ({ merchants: [] }))
+      ])
+      
+      setAiAdvice(adviceData.advice || [])
+      setAnomalies(anomaliesData.anomalies || [])
+      setCategoryTrends(trendsData)
+      setIncomeExpense(incomeExpenseData)
+      setBudgetDeviation(budgetData)
+      setGoalImpact(goalsData)
+      setCashFlowProjection(cashflowData)
+      setForecastData(forecastDataRes || null)
+      setMerchantAnalytics(merchantMetricsData.merchants || [])
+      if (!hasShownInsightsToast) {
+        showToast('✨ AI Insights Updated!', 'success')
+        setHasShownInsightsToast(true)
+      }
+    } catch (err) {
+      console.error('Failed to load intelligence data:', err)
+    } finally {
+      setLoadingIntelligence(false)
+    }
+  }, [activeTab, hasShownInsightsToast, showToast])
+
+  useEffect(() => {
+    loadIntelligenceData()
+  }, [loadIntelligenceData])
+
   // Listen for auth state changes to reload data when user changes
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
@@ -323,11 +582,21 @@ export default function SpendSense() {
 
   // Filter and sort transactions
   const filteredAndSortedTransactions = useMemo(() => {
-    // First, filter by search query
-    let filtered = transactions
+    // First, apply filter chips
+    let filtered: TransactionWithMeta[] = transactionsWithMeta
+    if (paymentModeFilter.length > 0) {
+      filtered = filtered.filter((txn) => paymentModeFilter.includes(txn.paymentMode))
+    }
+    if (merchantTypeFilter.length > 0) {
+      filtered = filtered.filter((txn) => merchantTypeFilter.includes(txn.merchantType))
+    }
+    if (locationFilter.length > 0) {
+      filtered = filtered.filter((txn) => locationFilter.includes(txn.locationLabel))
+    }
+    // Then filter by search query
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase()
-      filtered = transactions.filter((txn) => {
+      filtered = filtered.filter((txn) => {
         const merchant = (txn.merchant_name_norm || txn.merchant || '').toLowerCase()
         const category = (txn.category_code || txn.category || '').toLowerCase()
         const amount = String(txn.amount || '').toLowerCase()
@@ -366,7 +635,7 @@ export default function SpendSense() {
     })
     
     return sorted
-  }, [transactions, searchQuery, sortField, sortDirection])
+  }, [transactionsWithMeta, searchQuery, sortField, sortDirection, paymentModeFilter, merchantTypeFilter, locationFilter])
 
   // Paginate transactions
   const paginatedTransactions = useMemo(() => {
@@ -439,13 +708,13 @@ export default function SpendSense() {
       }
 
       const url = window.URL.createObjectURL(blob)
-      const link = document.createElement('a')
+    const link = document.createElement('a')
       const dateStr = new Date().toISOString().split('T')[0]
       link.href = url
       link.setAttribute('download', `transaction_template_${dateStr}.xlsx`)
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
       window.URL.revokeObjectURL(url)
 
       showToast('Template downloaded successfully', 'success')
@@ -611,7 +880,7 @@ export default function SpendSense() {
                   )
                 })}
               </div>
-            </div>
+            </motion.div>
           )}
 
           {/* Spending by Category Pie Chart */}
@@ -631,18 +900,20 @@ export default function SpendSense() {
                 <ResponsiveContainer width="100%" height={300}>
                   <PieChart>
                     <Pie
-                      data={byCategory.map(cat => ({
-                        name: cat.category,
-                        value: cat.amount,
-                        percentage: cat.percentage
-                      }))}
+                      data={pieChartData as any}
                       cx="50%"
                       cy="50%"
                       outerRadius={100}
                       fill="#8884d8"
                       dataKey="value"
+                      onClick={(data: any) => {
+                        if (data && data.categoryCode) {
+                          handleCategoryDrilldown(String(data.categoryCode), String(data.name || data.categoryCode))
+                        }
+                      }}
+                      style={{ cursor: 'pointer' }}
                     >
-                      {byCategory.map((_, index) => {
+                      {pieChartData.map((_, index) => {
                         // Color palette for categories
                         const colors = [
                           '#fbbf24', // yellow-400
@@ -680,21 +951,30 @@ export default function SpendSense() {
                   </PieChart>
                 </ResponsiveContainer>
               </div>
-            </div>
+            </motion.div>
           )}
         </div>
 
         {/* Insights Banner - Less Prominent, Below Main Content */}
         {insights.length > 0 && (
-          <div className="mb-4 sm:mb-6">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+            className="mb-4 sm:mb-6"
+          >
             <h2 className="text-base sm:text-lg font-semibold mb-3 text-gray-400">Key Insights</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {insights.slice(0, 2).map((insight, idx) => {
                 const isSignificantChange = Math.abs(insight.change_percentage) > 50
                 
                 return (
-                  <div
+                  <motion.div
                     key={idx}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: idx * 0.1 }}
+                    whileHover={{ scale: 1.02, y: -2 }}
                     className={`bg-gradient-to-r rounded-lg p-4 border ${
                       insight.change_percentage > 0
                         ? 'from-red-900/20 to-red-800/10 border-red-500/30'
@@ -712,15 +992,127 @@ export default function SpendSense() {
                         </p>
                       </div>
                     </div>
-                  </div>
+                  </motion.div>
                 )
               })}
             </div>
-          </div>
+          </motion.div>
         )}
 
+        {/* Milestones */}
+        {milestones.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+            className="mb-6"
+          >
+            <Milestones milestones={milestones} />
+          </motion.div>
+        )}
+
+        {/* Next-Gen Intelligence Layer - Tabbed Interface */}
+        <div className="mb-6 md:mb-8">
+          <div className="bg-gray-800 rounded-xl border border-gray-700">
+            {/* Tab Navigation */}
+            <div className="flex flex-wrap border-b border-gray-700">
+              {[
+                { id: 'overview', label: 'Overview', icon: '📊' },
+                { id: 'intelligence', label: 'AI Intelligence', icon: '🤖' },
+                { id: 'analytics', label: 'Analytics', icon: '📈' },
+                { id: 'budget', label: 'Budget', icon: '💰' },
+                { id: 'goals', label: 'Goals', icon: '🎯' }
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id as any)}
+                  className={`px-4 py-3 font-semibold text-sm transition-all ${
+                    activeTab === tab.id
+                      ? 'bg-yellow-500 text-black border-b-2 border-yellow-500'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-700/50'
+                  }`}
+                >
+                  <span className="mr-2">{tab.icon}</span>
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Tab Content */}
+            <div className="p-4 sm:p-6">
+              {activeTab === 'overview' && (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {aiAdvice.length > 0 && <SpendingCoach advice={aiAdvice} loading={loadingIntelligence} />}
+                    {anomalies.length > 0 && <AnomalyDetector anomalies={anomalies} loading={loadingIntelligence} />}
+                  </div>
+                  {merchantAnalytics.length > 0 && (
+                    <MerchantAnalytics merchants={merchantAnalytics} loading={loadingIntelligence} />
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'intelligence' && (
+                <div className="space-y-6">
+                  <SpendingCoach advice={aiAdvice} loading={loadingIntelligence} />
+                  <AnomalyDetector anomalies={anomalies} loading={loadingIntelligence} />
+                </div>
+              )}
+
+              {activeTab === 'analytics' && (
+                <div className="space-y-6">
+                  {categoryTrends && categoryTrends.categories && categoryTrends.categories.length > 0 && (
+                    <CategoryTrendChart trends={categoryTrends.categories} loading={loadingIntelligence} />
+                  )}
+                  {incomeExpense && incomeExpense.data && incomeExpense.data.length > 0 && (
+                    <IncomeExpenseChart data={incomeExpense.data} loading={loadingIntelligence} />
+                  )}
+                  {merchantAnalytics.length > 0 && (
+                    <MerchantAnalytics merchants={merchantAnalytics} loading={loadingIntelligence} />
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'budget' && (
+                <div className="space-y-6">
+                  <BudgetDeviation 
+                    deviations={budgetDeviation?.deviations || []} 
+                    loading={loadingIntelligence}
+                    message={budgetDeviation?.message}
+                  />
+                  {cashFlowProjection && cashFlowProjection.projections && (
+                    <CashFlowProjection
+                      current_balance={cashFlowProjection.current_balance || 0}
+                      average_monthly_income={cashFlowProjection.average_monthly_income || 0}
+                      average_monthly_expenses={cashFlowProjection.average_monthly_expenses || 0}
+                      projections={cashFlowProjection.projections || []}
+                      loading={loadingIntelligence}
+                      message={cashFlowProjection.message}
+                    />
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'goals' && (
+                <div className="space-y-6">
+                  <GoalImpact 
+                    goals={goalImpact?.goals || []} 
+                    loading={loadingIntelligence}
+                    message={goalImpact?.message}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* Enhanced Recent Transactions */}
-        <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700"
+        >
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 sm:mb-6 gap-4">
             <h2 className="text-lg sm:text-xl font-bold text-yellow-400 flex items-center gap-2">
               <span>💳</span> Recent Transactions
@@ -786,6 +1178,39 @@ export default function SpendSense() {
               </div>
             </div>
           </div>
+
+          <div className="bg-gray-900/60 border border-gray-700 rounded-lg p-3 sm:p-4 space-y-4 mb-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs uppercase tracking-wide text-gray-400">Dynamic Filters</span>
+              {(paymentModeFilter.length > 0 || merchantTypeFilter.length > 0 || locationFilter.length > 0) && (
+                <button
+                  onClick={clearAllFilters}
+                  className="text-xs text-yellow-400 hover:text-yellow-300 font-semibold"
+                >
+                  Clear Filters
+                </button>
+              )}
+            </div>
+            <FilterChips
+              title="Payment Mode"
+              options={paymentModeOptions}
+              selected={paymentModeFilter}
+              onToggle={(value) => toggleFilterValue(value, setPaymentModeFilter)}
+            />
+            <FilterChips
+              title="Merchant Type"
+              options={merchantTypeOptions}
+              selected={merchantTypeFilter}
+              onToggle={(value) => toggleFilterValue(value, setMerchantTypeFilter)}
+            />
+            <FilterChips
+              title="Location"
+              options={locationOptions}
+              selected={locationFilter}
+              onToggle={(value) => toggleFilterValue(value, setLocationFilter)}
+            />
+          </div>
+
           {filteredAndSortedTransactions.length > 0 ? (
             <>
               <div className="overflow-x-auto -mx-4 sm:mx-0">
@@ -894,6 +1319,17 @@ export default function SpendSense() {
                             <div className="sm:hidden mt-1">
                               <span className="inline-block bg-gray-700/50 text-gray-300 px-2 py-0.5 rounded text-xs">
                                 {getCategoryName(txn.category_code, txn.category)}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap gap-1 mt-2 text-[10px] text-gray-400">
+                              <span className="px-2 py-0.5 bg-gray-800 rounded-full border border-gray-700">
+                                {txn.paymentMode}
+                              </span>
+                              <span className="px-2 py-0.5 bg-gray-800 rounded-full border border-gray-700">
+                                {txn.merchantType}
+                              </span>
+                              <span className="px-2 py-0.5 bg-gray-800 rounded-full border border-gray-700">
+                                {txn.locationLabel}
                               </span>
                             </div>
                           </td>
@@ -1322,6 +1758,21 @@ export default function SpendSense() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Category Drilldown Modal */}
+        {drilldownCategory && (
+          <CategoryDrilldownModal
+            isOpen={!!drilldownCategory}
+            onClose={() => setDrilldownCategory(null)}
+            category={drilldownCategory.category}
+            categoryName={drilldownCategory.categoryName}
+            transactions={transactions.filter(txn => 
+              (txn.category_code || txn.category) === drilldownCategory.category
+            )}
+            totalAmount={byCategory.find(c => c.category === drilldownCategory.category)?.amount || 0}
+            transactionCount={byCategory.find(c => c.category === drilldownCategory.category)?.transaction_count || 0}
+          />
         )}
       </div>
     </div>

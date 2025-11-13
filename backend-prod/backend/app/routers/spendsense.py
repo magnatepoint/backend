@@ -4,7 +4,8 @@ Core expense tracking and analytics
 """
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
+from collections import defaultdict
 from app.routers.auth import get_current_user, UserDep
 from app.models.spendsense_models import TxnFact, TxnEnriched, TxnStaging
 from app.database.postgresql import sync_engine, SessionLocal
@@ -1236,6 +1237,844 @@ async def compare_periods(
             "comparison": comparison,
             "week_change_percentage": round(week_change, 2),
             "month_change_percentage": round(month_change, 2)
+        }
+    finally:
+        session.close()
+
+
+# =============================================================================
+# Next-Gen Intelligence Layer Endpoints
+# =============================================================================
+
+@router.get("/ai/advice")
+async def get_ai_spending_advice(
+    user: UserDep = Depends(get_current_user)
+):
+    """
+    Personalized Spending Coach - AI-driven insights with actionable advice
+    Returns human-readable messages like "Your dining spend is up 24% MoM. Reducing Zomato orders by 2/week could save ₹1,800."
+    """
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        
+        # Get current month and previous month
+        now = datetime.utcnow()
+        current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if now.month == 12:
+            current_month_end = datetime.combine(date(now.year + 1, 1, 1) - timedelta(days=1), datetime.max.time())
+        else:
+            current_month_end = datetime.combine(date(now.year, now.month + 1, 1) - timedelta(days=1), datetime.max.time())
+        
+        prev_month_start = (current_month_start - timedelta(days=32)).replace(day=1)
+        if prev_month_start.month == 12:
+            prev_month_end = datetime.combine(date(prev_month_start.year + 1, 1, 1) - timedelta(days=1), datetime.max.time())
+        else:
+            prev_month_end = datetime.combine(date(prev_month_start.year, prev_month_start.month + 1, 1) - timedelta(days=1), datetime.max.time())
+        
+        # Get category spending for both months
+        current_cats = session.query(
+            TxnEnriched.category_code,
+            func.sum(func.abs(TxnFact.amount)).label('spend'),
+            func.count(TxnFact.txn_id).label('count')
+        ).join(TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id).filter(
+            TxnFact.user_id == user_uuid,
+            TxnFact.txn_date >= current_month_start.date(),
+            TxnFact.txn_date <= current_month_end.date(),
+            TxnFact.direction == 'debit',
+            TxnEnriched.category_code.notin_(['income', 'transfers', 'others'])
+        ).group_by(TxnEnriched.category_code).all()
+        
+        prev_cats = session.query(
+            TxnEnriched.category_code,
+            func.sum(func.abs(TxnFact.amount)).label('spend')
+        ).join(TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id).filter(
+            TxnFact.user_id == user_uuid,
+            TxnFact.txn_date >= prev_month_start.date(),
+            TxnFact.txn_date <= prev_month_end.date(),
+            TxnFact.direction == 'debit',
+            TxnEnriched.category_code.notin_(['income', 'transfers', 'others'])
+        ).group_by(TxnEnriched.category_code).all()
+        
+        prev_map = {cat: float(amt) for cat, amt in prev_cats}
+        
+        advice = []
+        for cat, amt, txn_count in current_cats:
+            cat_name = session.execute(text("""
+                SELECT category_name FROM spendsense.dim_category WHERE category_code = :cat
+            """), {"cat": cat or 'others'}).scalar() or cat or 'Uncategorized'
+            
+            curr_spend = float(amt)
+            prev_spend = prev_map.get(cat, 0)
+            
+            if prev_spend > 0:
+                pct_change = ((curr_spend - prev_spend) / prev_spend) * 100
+                
+                # Generate actionable advice for significant increases
+                if pct_change > 20 and curr_spend > 1000:
+                    # Estimate potential savings (assume 2 transactions/week reduction)
+                    avg_txn = curr_spend / txn_count if txn_count > 0 else 0
+                    weekly_txns = txn_count / 4.33  # Approximate weeks in month
+                    potential_savings = avg_txn * 2 * 4.33  # 2 fewer txns/week
+                    
+                    # Get top merchant for this category
+                    top_merchant = session.query(
+                        TxnFact.merchant_name_norm,
+                        func.count(TxnFact.txn_id).label('count')
+                    ).join(TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id).filter(
+                        TxnFact.user_id == user_uuid,
+                        TxnFact.txn_date >= current_month_start.date(),
+                        TxnFact.txn_date <= current_month_end.date(),
+                        TxnFact.direction == 'debit',
+                        TxnEnriched.category_code == cat,
+                        TxnFact.merchant_name_norm.isnot(None)
+                    ).group_by(TxnFact.merchant_name_norm).order_by(func.count(TxnFact.txn_id).desc()).first()
+                    
+                    merchant_name = top_merchant[0] if top_merchant else "orders"
+                    
+                    advice.append({
+                        "category": cat,
+                        "category_name": cat_name,
+                        "change_percentage": round(pct_change, 1),
+                        "current_spend": round(curr_spend, 2),
+                        "message": f"Your {cat_name.lower()} spend is up {abs(pct_change):.0f}% MoM. Reducing {merchant_name} orders by 2/week could save ₹{potential_savings:.0f}.",
+                        "potential_savings": round(potential_savings, 2),
+                        "severity": "high" if pct_change > 50 else "medium"
+                    })
+        
+        return {"advice": sorted(advice, key=lambda x: abs(x["change_percentage"]), reverse=True)[:5]}
+    except Exception as e:
+        print(f"⚠️  Error generating AI advice: {e}")
+        return {"advice": []}
+    finally:
+        session.close()
+
+
+@router.get("/anomalies")
+async def detect_anomalies(
+    threshold_zscore: float = Query(2.5, ge=1.0, le=5.0),
+    user: UserDep = Depends(get_current_user)
+):
+    """
+    Expense Anomaly Detection - Flag outlier transactions using z-score or percentile
+    Returns transactions that are significantly higher than usual for their category/merchant
+    """
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        
+        # Get last 90 days for baseline
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=90)
+        
+        # Calculate mean and std dev per category
+        category_stats = session.query(
+            TxnEnriched.category_code,
+            func.avg(func.abs(TxnFact.amount)).label('mean'),
+            func.stddev(func.abs(TxnFact.amount)).label('stddev')
+        ).join(TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id).filter(
+            TxnFact.user_id == user_uuid,
+            TxnFact.txn_date >= start_date.date(),
+            TxnFact.txn_date <= end_date.date(),
+            TxnFact.direction == 'debit',
+            TxnEnriched.category_code.isnot(None)
+        ).group_by(TxnEnriched.category_code).all()
+        
+        stats_map = {cat: (float(mean), float(stddev or 0)) for cat, mean, stddev in category_stats}
+        
+        # Get recent transactions (last 30 days) and flag anomalies
+        recent_txns = session.query(
+            TxnFact.txn_id,
+            TxnFact.merchant_name_norm,
+            TxnFact.amount,
+            TxnFact.txn_date,
+            TxnEnriched.category_code
+        ).join(TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id).filter(
+            TxnFact.user_id == user_uuid,
+            TxnFact.txn_date >= (end_date - timedelta(days=30)).date(),
+            TxnFact.direction == 'debit',
+            TxnEnriched.category_code.isnot(None)
+        ).all()
+        
+        anomalies = []
+        for txn_id, merchant, amount, txn_date, cat in recent_txns:
+            if cat in stats_map:
+                mean, stddev = stats_map[cat]
+                if stddev > 0:
+                    zscore = (float(amount) - mean) / stddev
+                    if zscore > threshold_zscore:
+                        cat_name = session.execute(text("""
+                            SELECT category_name FROM spendsense.dim_category WHERE category_code = :cat
+                        """), {"cat": cat}).scalar() or cat
+                        
+                        anomalies.append({
+                            "txn_id": str(txn_id),
+                            "merchant": merchant or "Unknown",
+                            "amount": float(amount),
+                            "date": txn_date.isoformat() if isinstance(txn_date, date) else str(txn_date),
+                            "category": cat,
+                            "category_name": cat_name,
+                            "zscore": round(zscore, 2),
+                            "message": f"Spike detected: ₹{float(amount):,.0f} at {merchant or 'Unknown'} — {zscore:.1f}× your usual {cat_name.lower()} spend."
+                        })
+        
+        return {
+            "anomalies": sorted(anomalies, key=lambda x: x["zscore"], reverse=True),
+            "threshold_zscore": threshold_zscore
+        }
+    except Exception as e:
+        print(f"⚠️  Error detecting anomalies: {e}")
+        return {"anomalies": [], "threshold_zscore": threshold_zscore}
+    finally:
+        session.close()
+
+
+@router.get("/category-trends")
+async def get_category_trends(
+    months: int = Query(6, ge=1, le=12),
+    user: UserDep = Depends(get_current_user)
+):
+    """
+    Category Trends Over Time - Line/stacked area chart data showing category evolution
+    Returns data for 6-12 months showing trends like "Groceries ↑ +8%"
+    """
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=months * 30)
+        
+        # Get monthly category spending
+        result = session.query(
+            func.date_trunc('month', TxnFact.txn_date).label('month'),
+            TxnEnriched.category_code,
+            func.sum(func.abs(TxnFact.amount)).label('spend')
+        ).join(TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id).filter(
+            TxnFact.user_id == user_uuid,
+            TxnFact.txn_date >= start_date.date(),
+            TxnFact.txn_date <= end_date.date(),
+            TxnFact.direction == 'debit',
+            TxnEnriched.category_code.isnot(None),
+            TxnEnriched.category_code.notin_(['income', 'transfers', 'others'])
+        ).group_by(
+            func.date_trunc('month', TxnFact.txn_date),
+            TxnEnriched.category_code
+        ).order_by('month', 'spend').all()
+        
+        # Organize by category
+        category_data = {}
+        for month, cat, spend in result:
+            if cat not in category_data:
+                category_data[cat] = []
+            category_data[cat].append({
+                "month": month.isoformat() if isinstance(month, datetime) else str(month),
+                "spend": float(spend)
+            })
+        
+        # Calculate trends (first vs last month)
+        trends = []
+        for cat, data in category_data.items():
+            if len(data) >= 2:
+                first_spend = data[0]["spend"]
+                last_spend = data[-1]["spend"]
+                if first_spend > 0:
+                    pct_change = ((last_spend - first_spend) / first_spend) * 100
+                    cat_name = session.execute(text("""
+                        SELECT category_name FROM spendsense.dim_category WHERE category_code = :cat
+                    """), {"cat": cat}).scalar() or cat
+                    
+                    trends.append({
+                        "category": cat,
+                        "category_name": cat_name,
+                        "change_percentage": round(pct_change, 1),
+                        "trend": "↑" if pct_change > 0 else "↓",
+                        "data": data
+                    })
+        
+        return {
+            "period_months": months,
+            "categories": sorted(trends, key=lambda x: abs(x["change_percentage"]), reverse=True)
+        }
+    except Exception as e:
+        print(f"⚠️  Error getting category trends: {e}")
+        return {"period_months": months, "categories": []}
+    finally:
+        session.close()
+
+
+@router.get("/income-expense")
+async def get_income_expense_overlay(
+    months: int = Query(6, ge=1, le=12),
+    user: UserDep = Depends(get_current_user)
+):
+    """
+    Income vs Expense Overlay - Dual-axis line graph
+    Returns monthly income, expenses, and net savings over time
+    """
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=months * 30)
+        
+        # Get monthly income and expenses
+        result = session.query(
+            func.date_trunc('month', TxnFact.txn_date).label('month'),
+            func.sum(func.case((TxnFact.direction == 'credit', TxnFact.amount), else_=0)).label('income'),
+            func.sum(func.case((TxnFact.direction == 'debit', TxnFact.amount), else_=0)).label('expenses')
+        ).outerjoin(
+            TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id
+        ).filter(
+            TxnFact.user_id == user_uuid,
+            TxnFact.txn_date >= start_date.date(),
+            TxnFact.txn_date <= end_date.date(),
+            # Exclude transfers from both
+            (TxnEnriched.category_code.is_(None)) | (TxnEnriched.category_code != 'transfers')
+        ).group_by(func.date_trunc('month', TxnFact.txn_date)).order_by('month').all()
+        
+        data = []
+        cumulative_savings = 0.0
+        for month, income, expenses in result:
+            income_amt = float(income or 0)
+            expense_amt = float(expenses or 0)
+            net = income_amt - expense_amt
+            cumulative_savings += net
+            
+            data.append({
+                "month": month.isoformat() if isinstance(month, datetime) else str(month),
+                "income": income_amt,
+                "expenses": expense_amt,
+                "net_savings": net,
+                "cumulative_savings": cumulative_savings
+            })
+        
+        return {
+            "period_months": months,
+            "data": data
+        }
+    except Exception as e:
+        print(f"⚠️  Error getting income-expense overlay: {e}")
+        return {"period_months": months, "data": []}
+    finally:
+        session.close()
+
+
+@router.get("/budget-deviation")
+async def get_budget_deviation(
+    period_id: Optional[str] = Query(None),
+    user: UserDep = Depends(get_current_user)
+):
+    """
+    Budget Integration - Show actual spend vs planned by category
+    Links SpendSense ↔ BudgetPilot to show deviations
+    """
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        
+        # Get current period if not specified
+        if not period_id:
+            # Get most recent active period
+            period_row = session.execute(text("""
+                SELECT period_id FROM budgetpilot.budget_period
+                WHERE user_id = :uid
+                ORDER BY period_start DESC
+                LIMIT 1
+            """), {"uid": str(user_uuid)}).fetchone()
+            
+            if not period_row:
+                return {"deviations": [], "message": "No budget period found"}
+            
+            period_id = str(period_row[0])
+        
+        period_uuid = uuid.UUID(period_id) if isinstance(period_id, str) else period_id
+        
+        # Get period dates
+        period_info = session.execute(text("""
+            SELECT period_start, period_end FROM budgetpilot.budget_period
+            WHERE period_id = :pid AND user_id = :uid
+        """), {"pid": str(period_uuid), "uid": str(user_uuid)}).fetchone()
+        
+        if not period_info:
+            return {"deviations": [], "message": "Period not found"}
+        
+        period_start, period_end = period_info
+        
+        # Get planned budgets
+        planned = session.execute(text("""
+            SELECT band, category, planned_amount
+            FROM budgetpilot.user_budget_category_commit
+            WHERE user_id = :uid AND period_id = :pid
+        """), {"uid": str(user_uuid), "pid": str(period_uuid)}).fetchall()
+        
+        # Get actual spending
+        actuals = session.query(
+            TxnEnriched.category_code,
+            func.sum(func.abs(TxnFact.amount)).label('actual')
+        ).join(TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id).filter(
+            TxnFact.user_id == user_uuid,
+            TxnFact.txn_date >= period_start,
+            TxnFact.txn_date <= period_end,
+            TxnFact.direction == 'debit',
+            TxnEnriched.category_code.isnot(None)
+        ).group_by(TxnEnriched.category_code).all()
+        
+        actual_map = {cat: float(amt) for cat, amt in actuals}
+        
+        deviations = []
+        for band, category, planned_amt in planned:
+            actual_amt = actual_map.get(category, 0)
+            variance = actual_amt - float(planned_amt or 0)
+            variance_pct = (variance / float(planned_amt or 1)) * 100 if planned_amt else 0
+            
+            deviations.append({
+                "band": band,
+                "category": category,
+                "planned": float(planned_amt or 0),
+                "actual": actual_amt,
+                "variance": variance,
+                "variance_percentage": round(variance_pct, 1),
+                "message": f"You spent ₹{abs(variance):,.0f} {'more' if variance > 0 else 'less'} on {category} than planned this period."
+            })
+        
+        return {
+            "period_id": period_id,
+            "deviations": sorted(deviations, key=lambda x: abs(x["variance"]), reverse=True)
+        }
+    except Exception as e:
+        print(f"⚠️  Error getting budget deviation: {e}")
+        return {"deviations": [], "message": str(e)}
+    finally:
+        session.close()
+
+
+@router.get("/goal-impact")
+async def get_goal_impact(
+    user: UserDep = Depends(get_current_user)
+):
+    """
+    Goal-linked Spending - Show how spending affects financial goals
+    Highlights categories tied to goals and progress tracking
+    """
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        
+        # Get active goals
+        goals = session.execute(text("""
+            SELECT goal_id, goal_name, target_amount, current_amount, target_date
+            FROM goals.user_goals_master
+            WHERE user_id = :uid AND status = 'active'
+        """), {"uid": str(user_uuid)}).fetchall()
+        
+        if not goals:
+            return {"goals": [], "message": "No active goals found"}
+        
+        # Get current month spending by category
+        now = datetime.utcnow()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if now.month == 12:
+            month_end = datetime.combine(date(now.year + 1, 1, 1) - timedelta(days=1), datetime.max.time())
+        else:
+            month_end = datetime.combine(date(now.year, now.month + 1, 1) - timedelta(days=1), datetime.max.time())
+        
+        category_spend = session.query(
+            TxnEnriched.category_code,
+            func.sum(func.abs(TxnFact.amount)).label('spend')
+        ).join(TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id).filter(
+            TxnFact.user_id == user_uuid,
+            TxnFact.txn_date >= month_start.date(),
+            TxnFact.txn_date <= month_end.date(),
+            TxnFact.direction == 'debit'
+        ).group_by(TxnEnriched.category_code).all()
+        
+        spend_map = {cat: float(amt) for cat, amt in category_spend}
+        
+        goal_impacts = []
+        for goal_id, goal_name, target, current, target_date in goals:
+            # Simple heuristic: if goal is savings-related, show impact of wants spending
+            # For other goals, show relevant category spending
+            total_wants = sum(amt for cat, amt in spend_map.items() 
+                            if cat in ['food_dining', 'entertainment', 'shopping'])
+            
+            progress_pct = (float(current or 0) / float(target or 1)) * 100 if target else 0
+            
+            goal_impacts.append({
+                "goal_id": str(goal_id),
+                "goal_name": goal_name,
+                "target_amount": float(target or 0),
+                "current_amount": float(current or 0),
+                "progress_percentage": round(progress_pct, 1),
+                "target_date": target_date.isoformat() if target_date else None,
+                "impact_message": f"You're {progress_pct:.0f}% on track to fund your goal '{goal_name}' by {target_date.strftime('%B %Y') if target_date else 'target date'}."
+            })
+        
+        return {"goals": goal_impacts}
+    except Exception as e:
+        print(f"⚠️  Error getting goal impact: {e}")
+        return {"goals": [], "message": str(e)}
+    finally:
+        session.close()
+
+
+@router.get("/cashflow-projection")
+async def get_cashflow_projection(
+    months_ahead: int = Query(1, ge=1, le=3),
+    user: UserDep = Depends(get_current_user)
+):
+    """
+    Cash Flow Projection - Use income trends + recurring spends to project next-month liquidity
+    Returns projected balance with sparkline data
+    """
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        
+        # Get last 3 months income and expenses
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=90)
+        
+        monthly_data = session.query(
+            func.date_trunc('month', TxnFact.txn_date).label('month'),
+            func.sum(func.case((TxnFact.direction == 'credit', TxnFact.amount), else_=0)).label('income'),
+            func.sum(func.case((TxnFact.direction == 'debit', TxnFact.amount), else_=0)).label('expenses')
+        ).outerjoin(
+            TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id
+        ).filter(
+            TxnFact.user_id == user_uuid,
+            TxnFact.txn_date >= start_date.date(),
+            TxnFact.txn_date <= end_date.date(),
+            (TxnEnriched.category_code.is_(None)) | (TxnEnriched.category_code != 'transfers')
+        ).group_by(func.date_trunc('month', TxnFact.txn_date)).order_by('month').all()
+        
+        if not monthly_data:
+            return {"projection": None, "message": "Insufficient data for projection"}
+        
+        # Calculate averages
+        avg_income = sum(float(inc or 0) for _, inc, _ in monthly_data) / len(monthly_data)
+        avg_expenses = sum(float(exp or 0) for _, _, exp in monthly_data) / len(monthly_data)
+        
+        # Get current balance (simplified: sum of all transactions)
+        all_net = session.query(
+            func.sum(func.case((TxnFact.direction == 'credit', TxnFact.amount), else_=-TxnFact.amount))
+        ).outerjoin(
+            TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id
+        ).filter(
+            TxnFact.user_id == user_uuid,
+            (TxnEnriched.category_code.is_(None)) | (TxnEnriched.category_code != 'transfers')
+        ).scalar()
+        
+        current_balance = float(all_net or 0)
+        
+        # Project forward
+        projections = []
+        balance = current_balance
+        for i in range(months_ahead):
+            next_month = end_date + timedelta(days=30 * (i + 1))
+            balance += (avg_income - avg_expenses)
+            projections.append({
+                "month": next_month.strftime("%Y-%m"),
+                "projected_income": round(avg_income, 2),
+                "projected_expenses": round(avg_expenses, 2),
+                "projected_balance": round(balance, 2),
+                "net_flow": round(avg_income - avg_expenses, 2)
+            })
+        
+        return {
+            "current_balance": round(current_balance, 2),
+            "average_monthly_income": round(avg_income, 2),
+            "average_monthly_expenses": round(avg_expenses, 2),
+            "projections": projections
+        }
+    except Exception as e:
+        print(f"⚠️  Error getting cashflow projection: {e}")
+        return {"projection": None, "message": str(e)}
+    finally:
+        session.close()
+
+
+@router.get("/forecast")
+async def get_spending_forecast(
+    months: int = Query(6, ge=3, le=18),
+    user: UserDep = Depends(get_current_user)
+):
+    """
+    Predict next-month spending per category using simple linear regression trend.
+    Acts as a lightweight forecast to highlight categories likely to spike.
+    """
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=months * 30)
+
+        rows = session.execute(text("""
+            SELECT 
+                date_trunc('month', tf.txn_date)::date AS month,
+                COALESCE(te.category_code, 'uncategorized') AS category_code,
+                SUM(CASE WHEN tf.direction = 'debit' THEN tf.amount ELSE 0 END) AS spend
+            FROM spendsense.txn_fact tf
+            LEFT JOIN spendsense.txn_enriched te ON te.txn_id = tf.txn_id
+            WHERE tf.user_id = :uid
+              AND tf.direction = 'debit'
+              AND tf.txn_date >= :start_date
+              AND tf.txn_date <= :end_date
+            GROUP BY month, category_code
+            ORDER BY month ASC
+        """), {
+            "uid": str(user_uuid),
+            "start_date": start_date.date(),
+            "end_date": end_date.date()
+        }).fetchall()
+
+        if not rows:
+            return {
+                "period": {
+                    "start": start_date.date().isoformat(),
+                    "end": end_date.date().isoformat(),
+                    "next_month": None
+                },
+                "forecasts": []
+            }
+
+        # Build time series per category
+        category_series: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        months_seen = sorted({row.month for row in rows})
+        month_index_map = {month: idx for idx, month in enumerate(months_seen)}
+
+        for row in rows:
+            category_series[row.category_code].append({
+                "month": row.month,
+                "index": month_index_map[row.month],
+                "spend": float(row.spend or 0)
+            })
+
+        # Fetch category names once
+        category_names = session.execute(text("""
+            SELECT category_code, category_name 
+            FROM spendsense.dim_category
+        """)).fetchall()
+        category_name_map = {code: name for code, name in category_names}
+        category_name_map.setdefault('uncategorized', 'Uncategorized')
+
+        forecasts = []
+        for category_code, series in category_series.items():
+            if not series:
+                continue
+            series_sorted = sorted(series, key=lambda x: x["index"])
+            ys = [point["spend"] for point in series_sorted]
+            xs = list(range(len(series_sorted)))
+            last_value = ys[-1]
+
+            if len(xs) >= 2:
+                x_mean = sum(xs) / len(xs)
+                y_mean = sum(ys) / len(ys)
+                numerator = sum((xs[i] - x_mean) * (ys[i] - y_mean) for i in range(len(xs)))
+                denominator = sum((xs[i] - x_mean) ** 2 for i in range(len(xs))) or 1
+                slope = numerator / denominator
+                intercept = y_mean - slope * x_mean
+                next_index = len(xs)
+                forecast_value = intercept + slope * next_index
+                method = "trend"
+            else:
+                forecast_value = ys[-1]
+                method = "recent_value"
+
+            if len(series_sorted) >= 3:
+                recent_avg = sum(ys[-3:]) / min(3, len(ys))
+                forecast_value = (forecast_value + recent_avg) / 2
+
+            forecast_value = max(0.0, float(forecast_value))
+            change_pct = ((forecast_value - last_value) / last_value * 100) if last_value else 0.0
+            confidence = min(1.0, len(series_sorted) / 6)
+
+            forecasts.append({
+                "category": category_code,
+                "category_name": category_name_map.get(category_code, category_code.title()),
+                "predicted_amount": round(forecast_value, 2),
+                "last_amount": round(last_value, 2),
+                "change_percentage": round(change_pct, 2),
+                "method": method,
+                "confidence": round(confidence, 2),
+                "data_points": len(series_sorted)
+            })
+
+        next_month = (end_date.replace(day=1) + timedelta(days=32)).replace(day=1).date()
+
+        return {
+            "period": {
+                "start": start_date.date().isoformat(),
+                "end": end_date.date().isoformat(),
+                "next_month": next_month.isoformat()
+            },
+            "forecasts": sorted(forecasts, key=lambda x: x["predicted_amount"], reverse=True)
+        }
+    except Exception as e:
+        print(f"⚠️  Error generating forecast: {e}")
+        return {"period": None, "forecasts": []}
+    finally:
+        session.close()
+
+
+@router.get("/merchant-metrics")
+async def get_merchant_metrics(
+    limit: int = Query(10, ge=3, le=50),
+    lookback_months: int = Query(3, ge=1, le=12),
+    user: UserDep = Depends(get_current_user)
+):
+    """
+    Aggregated merchant metrics including totals, frequency, and trend.
+    """
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+
+        end_date = datetime.utcnow().date()
+        start_date = (datetime.utcnow() - timedelta(days=lookback_months * 30)).date()
+        prev_end_date = start_date - timedelta(days=1)
+        prev_start_date = prev_end_date - timedelta(days=lookback_months * 30)
+
+        merchant_rows = session.execute(text("""
+            SELECT
+                tf.merchant_name_norm AS merchant,
+                SUM(CASE WHEN tf.direction = 'debit' THEN tf.amount ELSE 0 END) AS total_spend,
+                COUNT(*) AS txn_count,
+                AVG(CASE WHEN tf.direction = 'debit' THEN tf.amount ELSE NULL END) AS avg_ticket,
+                MAX(tf.txn_date) AS last_txn,
+                MIN(tf.txn_date) AS first_txn
+            FROM spendsense.txn_fact tf
+            WHERE tf.user_id = :uid
+              AND tf.direction = 'debit'
+              AND tf.merchant_name_norm IS NOT NULL
+              AND tf.txn_date >= :start_date
+              AND tf.txn_date <= :end_date
+            GROUP BY tf.merchant_name_norm
+            ORDER BY total_spend DESC
+            LIMIT :limit
+        """), {
+            "uid": str(user_uuid),
+            "start_date": start_date,
+            "end_date": end_date,
+            "limit": limit
+        }).fetchall()
+
+        if not merchant_rows:
+            return {
+                "period": {
+                    "start": start_date.isoformat(),
+                    "end": end_date.isoformat()
+                },
+                "merchants": []
+            }
+
+        merchants = [row.merchant for row in merchant_rows if row.merchant]
+
+        if not merchants:
+            return {
+                "period": {
+                    "start": start_date.isoformat(),
+                    "end": end_date.isoformat()
+                },
+                "merchants": []
+            }
+
+        merchant_category_rows = session.query(
+            TxnFact.merchant_name_norm.label("merchant"),
+            func.coalesce(TxnEnriched.category_code, 'uncategorized').label("category_code"),
+            func.sum(func.case((TxnFact.direction == 'debit', TxnFact.amount), else_=0)).label("spend")
+        ).outerjoin(
+            TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id
+        ).filter(
+            TxnFact.user_id == user_uuid,
+            TxnFact.direction == 'debit',
+            TxnFact.merchant_name_norm.in_(merchants),
+            TxnFact.txn_date >= start_date,
+            TxnFact.txn_date <= end_date
+        ).group_by(
+            TxnFact.merchant_name_norm,
+            TxnEnriched.category_code
+        ).all()
+
+        prev_rows = session.query(
+            TxnFact.merchant_name_norm.label("merchant"),
+            func.sum(func.case((TxnFact.direction == 'debit', TxnFact.amount), else_=0)).label("total_spend")
+        ).filter(
+            TxnFact.user_id == user_uuid,
+            TxnFact.direction == 'debit',
+            TxnFact.merchant_name_norm.in_(merchants),
+            TxnFact.txn_date >= prev_start_date,
+            TxnFact.txn_date <= prev_end_date
+        ).group_by(
+            TxnFact.merchant_name_norm
+        ).all()
+
+        category_names = session.execute(text("""
+            SELECT category_code, category_name 
+            FROM spendsense.dim_category
+        """)).fetchall()
+        category_name_map = {code: name for code, name in category_names}
+        category_name_map.setdefault('uncategorized', 'Uncategorized')
+
+        category_spend_map: Dict[str, Dict[str, float]] = defaultdict(dict)
+        for row in merchant_category_rows:
+            category_spend_map[row.merchant][row.category_code] = float(row.spend or 0)
+
+        prev_spend_map = {row.merchant: float(row.total_spend or 0) for row in prev_rows}
+
+        lookback_days = max(1, (end_date - start_date).days)
+
+        metrics = []
+        for row in merchant_rows:
+            merchant = row.merchant
+            if not merchant:
+                continue
+            total_spend = float(row.total_spend or 0)
+            txn_count = int(row.txn_count or 0)
+            avg_ticket = float(row.avg_ticket or 0)
+            last_txn = row.last_txn.isoformat() if row.last_txn else None
+            first_txn = row.first_txn.isoformat() if row.first_txn else None
+
+            category_spend = category_spend_map.get(merchant, {})
+            if category_spend:
+                top_category_code = max(category_spend.items(), key=lambda kv: kv[1])[0]
+                top_category_name = category_name_map.get(top_category_code, top_category_code.title())
+            else:
+                top_category_code = 'uncategorized'
+                top_category_name = 'Uncategorized'
+
+            prev_total = prev_spend_map.get(merchant, 0.0)
+            trend_change = ((total_spend - prev_total) / prev_total * 100) if prev_total else 0.0
+
+            metrics.append({
+                "merchant": merchant,
+                "total_spending": round(total_spend, 2),
+                "transaction_count": txn_count,
+                "average_ticket": round(avg_ticket, 2),
+                "daily_frequency": round(txn_count / lookback_days, 2),
+                "last_transaction": last_txn,
+                "first_transaction": first_txn,
+                "top_category": top_category_name,
+                "merchant_type": top_category_name,
+                "trend_percentage": round(trend_change, 2)
+            })
+
+        return {
+            "period": {
+                "start": start_date.isoformat(),
+                "end": end_date.isoformat(),
+                "previous_start": prev_start_date.isoformat(),
+                "previous_end": prev_end_date.isoformat()
+            },
+            "merchants": metrics
+        }
+    except Exception as e:
+        print(f"⚠️  Error getting merchant metrics: {e}")
+        return {
+            "period": None,
+            "merchants": []
         }
     finally:
         session.close()
