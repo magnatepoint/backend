@@ -143,7 +143,6 @@ CREATE OR REPLACE FUNCTION budgetpilot.generate_recommendations(
 ) RETURNS TABLE(plan_code text, score numeric, needs_budget_pct numeric, wants_budget_pct numeric, savings_budget_pct numeric, recommendation_reason text, period_id uuid) AS $$
 DECLARE pid uuid := budgetpilot.upsert_period(p_user, p_type, p_start, p_end);
 BEGIN
-  RETURN QUERY
   WITH actual AS (
     SELECT
       SUM(CASE WHEN txn_type='income' AND direction='credit' THEN amount ELSE 0 END) AS income_amt,
