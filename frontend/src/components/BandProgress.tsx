@@ -1,3 +1,4 @@
+import { motion } from 'framer-motion'
 import { formatCurrency } from '../lib/utils'
 
 interface BandProgressProps {
@@ -11,23 +12,37 @@ export function BandProgress({ label, spent, plan }: BandProgressProps) {
   const over = spent > plan
 
   return (
-    <div className="bg-gray-800 rounded-xl p-4 shadow-lg border border-gray-700/50">
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className="bg-gray-800 rounded-xl p-4 shadow-lg border border-gray-700/50 hover:border-yellow-500/30 transition-colors"
+    >
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm text-gray-400 uppercase tracking-wide">{label}</span>
-        <span className={`text-sm font-semibold ${over ? 'text-red-400' : 'text-green-400'}`}>
+        <span className="text-sm font-semibold text-gray-300">{label}</span>
+        <span className={`text-sm font-bold ${over ? 'text-red-400' : 'text-green-400'}`}>
           {pct}%
         </span>
       </div>
-      <div className="h-2 w-full bg-gray-700/50 rounded-full overflow-hidden mb-2">
-        <div
-          className={`h-2 rounded-full transition-all duration-300 ${over ? 'bg-red-500' : 'bg-yellow-500'}`}
-          style={{ width: `${Math.min(100, pct)}%` }}
+      <div className="h-2.5 w-full bg-gray-700 rounded-full overflow-hidden mb-2">
+        <motion.div
+          initial={{ width: 0 }}
+          animate={{ width: `${Math.min(100, pct)}%` }}
+          transition={{ duration: 0.8, ease: 'easeOut' }}
+          className={`h-2.5 rounded-full ${
+            over
+              ? 'bg-red-500'
+              : 'bg-gradient-to-r from-yellow-500 to-yellow-600'
+          }`}
+          style={{
+            boxShadow: over ? 'none' : '0 0 10px rgba(212, 175, 55, 0.5)'
+          }}
         />
       </div>
-      <div className="text-xs text-gray-500">
+      <div className="text-xs text-gray-400">
         {formatCurrency(spent)} / {formatCurrency(plan)}
       </div>
-    </div>
+    </motion.div>
   )
 }
 

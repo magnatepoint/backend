@@ -744,3 +744,247 @@ async def get_categories_period(
     finally:
         session.close()
 
+
+@router.get("/trends")
+async def get_trends(
+    period_id: str = Query(..., description="Period ID"),
+    user: UserDep = Depends(get_current_user)
+):
+    """Get historical trends for the last 6 periods"""
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        period_uuid = uuid.UUID(period_id) if isinstance(period_id, str) else period_id
+        
+        # Get current period dates
+        current_period = session.execute(text("""
+            SELECT period_start, period_end, period_type
+            FROM budgetpilot.budget_period
+            WHERE period_id = :period_id AND user_id = :user_id
+        """), {
+            "period_id": str(period_uuid),
+            "user_id": str(user_uuid)
+        }).mappings().first()
+        
+        if not current_period:
+            return {"items": []}
+        
+        # Get last 6 periods (including current)
+        result = session.execute(text("""
+            SELECT 
+                bp.period_id,
+                bp.label AS period_label,
+                bp.period_start,
+                bp.period_end,
+                COALESCE(buma.needs_amt, 0) AS needs_spent,
+                COALESCE(buma.wants_amt, 0) AS wants_spent,
+                COALESCE(buma.assets_amt, 0) AS assets_spent,
+                COALESCE(buma.planned_needs_amt, 0) AS needs_plan,
+                COALESCE(buma.planned_wants_amt, 0) AS wants_plan,
+                COALESCE(buma.planned_assets_amt, 0) AS assets_plan,
+                COALESCE(buma.income_amt, 0) AS income
+            FROM budgetpilot.budget_period bp
+            LEFT JOIN budgetpilot.budget_user_month_aggregate buma 
+                ON buma.period_id = bp.period_id AND buma.user_id = bp.user_id
+            WHERE bp.user_id = :user_id
+              AND bp.period_type = :period_type
+              AND bp.period_start <= :current_end
+            ORDER BY bp.period_start DESC
+            LIMIT 6
+        """), {
+            "user_id": str(user_uuid),
+            "period_type": current_period["period_type"],
+            "current_end": current_period["period_end"]
+        })
+        
+        items = []
+        for row in result:
+            items.append({
+                "period_id": str(row.period_id),
+                "period_label": row.period_label,
+                "period": row.period_label.split(": ")[1] if ": " in row.period_label else str(row.period_start),
+                "needs_spent": float(row.needs_spent) if row.needs_spent else 0,
+                "wants_spent": float(row.wants_spent) if row.wants_spent else 0,
+                "assets_spent": float(row.assets_spent) if row.assets_spent else 0,
+                "needs_plan": float(row.needs_plan) if row.needs_plan else 0,
+                "wants_plan": float(row.wants_plan) if row.wants_plan else 0,
+                "assets_plan": float(row.assets_plan) if row.assets_plan else 0,
+                "income": float(row.income) if row.income else 0
+            })
+        
+        return {"items": list(reversed(items))}  # Return chronological order
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch trends: {str(e)}")
+    finally:
+        session.close()
+
+
+@router.get("/insights/explain")
+async def get_insights(
+    period_id: str = Query(..., description="Period ID"),
+    user: UserDep = Depends(get_current_user)
+):
+    """Generate AI insights and explanations for the current period"""
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        period_uuid = uuid.UUID(period_id) if isinstance(period_id, str) else period_id
+        
+        # Get current overview
+        overview = session.execute(text("""
+            SELECT * FROM budgetpilot.v_budget_overview
+            WHERE user_id = :user_id AND period_id = :period_id
+        """), {
+            "user_id": str(user_uuid),
+            "period_id": str(period_uuid)
+        }).mappings().first()
+        
+        if not overview:
+            return {"insights": []}
+        
+        # Get previous period for comparison
+        prev_period = session.execute(text("""
+            SELECT * FROM budgetpilot.v_budget_overview
+            WHERE user_id = :user_id
+              AND period_id != :period_id
+            ORDER BY period_id DESC
+            LIMIT 1
+        """), {
+            "user_id": str(user_uuid),
+            "period_id": str(period_uuid)
+        }).mappings().first()
+        
+        insights = []
+        
+        # Variance analysis
+        if overview["needs_variance"] > 0:
+            pct = (overview["needs_variance"] / overview["needs_plan"]) * 100 if overview["needs_plan"] > 0 else 0
+            insights.append({
+                "type": "warning",
+                "icon": "⚠️",
+                "title": "Needs Overspend",
+                "message": f"You've exceeded your needs budget by ₹{abs(overview['needs_variance']):,.0f}",
+                "value": f"+{pct:.1f}% over plan",
+                "action": "Review essential expenses and consider reallocating from wants"
+            })
+        
+        if overview["wants_variance"] > 0:
+            pct = (overview["wants_variance"] / overview["wants_plan"]) * 100 if overview["wants_plan"] > 0 else 0
+            insights.append({
+                "type": "danger",
+                "icon": "🚨",
+                "title": "Wants Overspend Alert",
+                "message": f"Wants spending is ₹{abs(overview['wants_variance']):,.0f} over budget",
+                "value": f"+{pct:.1f}% over plan",
+                "action": "Consider reducing discretionary spending this period"
+            })
+        elif overview["wants_variance"] < -overview["wants_plan"] * 0.1:
+            insights.append({
+                "type": "success",
+                "icon": "✅",
+                "title": "Great Wants Control",
+                "message": f"You're under wants budget by ₹{abs(overview['wants_variance']):,.0f}",
+                "value": "Excellent discipline!",
+                "action": "Consider redirecting savings to assets"
+            })
+        
+        # Savings analysis
+        if overview["assets_variance"] < 0:
+            insights.append({
+                "type": "warning",
+                "icon": "💰",
+                "title": "Savings Below Target",
+                "message": f"You're saving ₹{abs(overview['assets_variance']):,.0f} less than planned",
+                "value": f"{(overview['assets_variance'] / overview['assets_plan'] * 100):.1f}% below target",
+                "action": "Review spending patterns and increase savings allocation"
+            })
+        
+        # Period comparison
+        if prev_period:
+            needs_change = ((overview["needs_spent"] - prev_period["needs_spent"]) / prev_period["needs_spent"] * 100) if prev_period["needs_spent"] > 0 else 0
+            wants_change = ((overview["wants_spent"] - prev_period["wants_spent"]) / prev_period["wants_spent"] * 100) if prev_period["wants_spent"] > 0 else 0
+            assets_change = ((overview["assets_spent"] - prev_period["assets_spent"]) / prev_period["assets_spent"] * 100) if prev_period["assets_spent"] > 0 else 0
+            
+            if wants_change > 10:
+                insights.append({
+                    "type": "warning",
+                    "icon": "📈",
+                    "title": "Wants Trend Up",
+                    "message": f"Wants spending increased {wants_change:.1f}% vs last period",
+                    "value": "Monitor this trend",
+                    "action": "Consider setting stricter wants limits"
+                })
+        
+        # Plan recommendation
+        if overview["plan_name"]:
+            insights.append({
+                "type": "info",
+                "icon": "🎯",
+                "title": "Active Plan",
+                "message": f"Following {overview['plan_name']} strategy",
+                "value": overview["plan_code"],
+                "action": "This plan is optimized for your spending patterns"
+            })
+        
+        return {"insights": insights}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to generate insights: {str(e)}")
+    finally:
+        session.close()
+
+
+@router.get("/comparison")
+async def get_period_comparison(
+    period_id: str = Query(..., description="Period ID"),
+    user: UserDep = Depends(get_current_user)
+):
+    """Compare current period with previous period"""
+    session = SessionLocal()
+    try:
+        user_uuid = uuid.UUID(user.user_id) if isinstance(user.user_id, str) else user.user_id
+        period_uuid = uuid.UUID(period_id) if isinstance(period_id, str) else period_id
+        
+        # Get current period
+        current = session.execute(text("""
+            SELECT * FROM budgetpilot.v_budget_overview
+            WHERE user_id = :user_id AND period_id = :period_id
+        """), {
+            "user_id": str(user_uuid),
+            "period_id": str(period_uuid)
+        }).mappings().first()
+        
+        if not current:
+            return None
+        
+        # Get previous period
+        previous = session.execute(text("""
+            SELECT * FROM budgetpilot.v_budget_overview
+            WHERE user_id = :user_id
+              AND period_id != :period_id
+            ORDER BY period_id DESC
+            LIMIT 1
+        """), {
+            "user_id": str(user_uuid),
+            "period_id": str(period_uuid)
+        }).mappings().first()
+        
+        if not previous:
+            return None
+        
+        # Calculate percentage changes
+        needs_change = ((current["needs_spent"] - previous["needs_spent"]) / previous["needs_spent"] * 100) if previous["needs_spent"] > 0 else 0
+        wants_change = ((current["wants_spent"] - previous["wants_spent"]) / previous["wants_spent"] * 100) if previous["wants_spent"] > 0 else 0
+        assets_change = ((current["assets_spent"] - previous["assets_spent"]) / previous["assets_spent"] * 100) if previous["assets_spent"] > 0 else 0
+        
+        return {
+            "needsChange": round(needs_change, 1),
+            "wantsChange": round(wants_change, 1),
+            "assetsChange": round(assets_change, 1),
+            "periodLabel": current["period_label"],
+            "previousPeriodLabel": previous["period_label"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch comparison: {str(e)}")
+    finally:
+        session.close()
+

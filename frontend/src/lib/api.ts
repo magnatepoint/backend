@@ -887,6 +887,46 @@ class ApiClient {
     }>(`/api/budgetpilot/categories/period?period_id=${periodId}`)
   }
 
+  async getBudgetTrends(periodId: string) {
+    return this.request<{
+      items: Array<{
+        period_id: string
+        period_label: string
+        period: string
+        needs_spent: number
+        wants_spent: number
+        assets_spent: number
+        needs_plan: number
+        wants_plan: number
+        assets_plan: number
+        income: number
+      }>
+    }>(`/api/budgetpilot/trends?period_id=${periodId}`)
+  }
+
+  async getBudgetInsights(periodId: string) {
+    return this.request<{
+      insights: Array<{
+        type: 'warning' | 'success' | 'info' | 'danger'
+        icon: string
+        title: string
+        message: string
+        value?: string
+        action?: string
+      }>
+    }>(`/api/budgetpilot/insights/explain?period_id=${periodId}`)
+  }
+
+  async getPeriodComparison(periodId: string) {
+    return this.request<{
+      needsChange: number
+      wantsChange: number
+      assetsChange: number
+      periodLabel: string
+      previousPeriodLabel: string
+    } | null>(`/api/budgetpilot/comparison?period_id=${periodId}`)
+  }
+
   // GoalCompass APIs
   async getGoalProgress(goalId?: string, month?: string) {
     const params = new URLSearchParams()

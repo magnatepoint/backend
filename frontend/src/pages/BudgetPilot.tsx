@@ -6,6 +6,12 @@ import { BandProgress } from '../components/BandProgress'
 import BudgetRecommendations from '../components/BudgetRecommendations'
 import CategoryTable from '../components/CategoryTable'
 import PeriodPicker from '../components/PeriodPicker'
+import TrendChart from '../components/TrendChart'
+import InsightsPanel from '../components/InsightsPanel'
+import AllocationDonut, { AllocationColors } from '../components/AllocationDonut'
+import CategoryMicrocards from '../components/CategoryMicrocards'
+import PeriodComparison from '../components/PeriodComparison'
+import WhatIfSimulator from '../components/WhatIfSimulator'
 
 type PeriodType = 'monthly' | 'quarterly' | 'custom'
 
@@ -117,8 +123,12 @@ export default function BudgetPilot() {
   const [overview, setOverview] = useState<Overview | null>(null)
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [categories, setCategories] = useState<CategoryItem[]>([])
+  const [trends, setTrends] = useState<any[]>([])
+  const [insights, setInsights] = useState<any[]>([])
+  const [comparison, setComparison] = useState<any>(null)
   
   const [loading, setLoading] = useState(false)
+  const [activeTab, setActiveTab] = useState<'overview' | 'insights' | 'simulator'>('overview')
   const [creatingPeriod, setCreatingPeriod] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [autofilling, setAutofilling] = useState(false)
@@ -240,13 +250,19 @@ export default function BudgetPilot() {
       setLoading(true)
       setError(null)
 
-      const [overviewData, categoriesData] = await Promise.all([
+      const [overviewData, categoriesData, trendsData, insightsData, comparisonData] = await Promise.all([
         apiClient.getBudgetOverview(periodId).catch(() => null),
-        apiClient.getCategoryBudgets(periodId).catch(() => ({ items: [] }))
+        apiClient.getCategoryBudgets(periodId).catch(() => ({ items: [] })),
+        apiClient.getBudgetTrends(periodId).catch(() => ({ items: [] })),
+        apiClient.getBudgetInsights(periodId).catch(() => ({ insights: [] })),
+        apiClient.getPeriodComparison(periodId).catch(() => null)
       ])
 
       setOverview(overviewData)
       setCategories(categoriesData.items || [])
+      setTrends(trendsData.items || [])
+      setInsights(insightsData.insights || [])
+      setComparison(comparisonData)
     } catch (err: unknown) {
       console.error('Error loading data:', err)
       const errorMessage = err instanceof Error ? err.message : 'Failed to load data'
@@ -266,7 +282,7 @@ export default function BudgetPilot() {
         {/* Header */}
         <header className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
-            <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold mb-2 bg-gradient-to-r from-yellow-400 to-yellow-600 bg-clip-text text-transparent">
+            <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold mb-2 bg-gradient-to-r from-yellow-400 via-yellow-500 to-yellow-600 bg-clip-text text-transparent drop-shadow-[0_0_15px_rgba(212,175,55,0.5)]">
               BudgetPilot
             </h1>
             <div className="text-gray-400 text-sm">Periodized Budget Planning</div>
@@ -366,22 +382,162 @@ export default function BudgetPilot() {
           />
         </section>
 
-        {/* Main Content */}
-        <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2">
-            <CategoryTable data={categories} />
+        {/* Tabs Navigation */}
+        {periodId && (
+          <div className="mb-6 flex gap-2 border-b border-gray-700">
+            {(['overview', 'insights', 'simulator'] as const).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`px-4 py-2 text-sm font-semibold transition-colors ${
+                  activeTab === tab
+                    ? 'text-yellow-400 border-b-2 border-yellow-400'
+                    : 'text-gray-400 hover:text-gray-300'
+                }`}
+              >
+                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              </button>
+            ))}
           </div>
-          <div>
-            <BudgetRecommendations
-              items={recommendations}
-              periodId={periodId}
-              activePlanCode={overview?.plan_code}
-              onCommit={async (_planCode) => {
-                await loadData()
+        )}
+
+        {/* Tab Content */}
+        {activeTab === 'overview' && (
+          <>
+            {/* Trend Charts & Allocation */}
+            {trends.length > 0 && (
+              <section className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+                <TrendChart
+                  data={trends.map((t) => ({
+                    period: t.period,
+                    spent: t.needs_spent + t.wants_spent,
+                    plan: t.needs_plan + t.wants_plan,
+                    savings: t.assets_spent
+                  }))}
+                  title="Spending Trend"
+                  showSavings={true}
+                />
+                {overview && (
+                  <AllocationDonut
+                    data={[
+                      {
+                        name: 'Needs',
+                        value: overview.needs_plan,
+                        color: AllocationColors.needs
+                      },
+                      {
+                        name: 'Wants',
+                        value: overview.wants_plan,
+                        color: AllocationColors.wants
+                      },
+                      {
+                        name: 'Assets',
+                        value: overview.assets_plan,
+                        color: AllocationColors.assets
+                      }
+                    ]}
+                    title="Budget Allocation"
+                  />
+                )}
+              </section>
+            )}
+
+            {/* Category Microcards */}
+            {categories.length > 0 && (
+              <section className="mb-6 space-y-4">
+                {(['needs', 'wants', 'assets'] as const).map((band) => {
+                  const bandCategories = categories.filter((c) => c.band === band)
+                  if (bandCategories.length === 0) return null
+                  return (
+                    <CategoryMicrocards
+                      key={band}
+                      items={bandCategories.map((c) => ({
+                        category: c.category,
+                        spent: 0, // TODO: Get actual spent from transactions
+                        plan: c.planned_amount
+                      }))}
+                      band={band}
+                    />
+                  )
+                })}
+              </section>
+            )}
+
+            {/* Main Content Grid */}
+            <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+              <div className="lg:col-span-2">
+                <CategoryTable data={categories} />
+              </div>
+              <div className="space-y-4">
+                <BudgetRecommendations
+                  items={recommendations}
+                  periodId={periodId}
+                  activePlanCode={overview?.plan_code}
+                  onCommit={async (_planCode) => {
+                    await loadData()
+                  }}
+                />
+                {comparison && <PeriodComparison comparison={comparison} />}
+              </div>
+            </section>
+          </>
+        )}
+
+        {activeTab === 'insights' && (
+          <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <InsightsPanel insights={insights} />
+            {comparison && <PeriodComparison comparison={comparison} />}
+            {trends.length > 0 && (
+              <div className="lg:col-span-2">
+                <TrendChart
+                  data={trends.map((t) => ({
+                    period: t.period,
+                    spent: t.needs_spent + t.wants_spent + t.assets_spent,
+                    plan: t.needs_plan + t.wants_plan + t.assets_plan
+                  }))}
+                  title="Total Spending vs Plan"
+                />
+              </div>
+            )}
+          </section>
+        )}
+
+        {activeTab === 'simulator' && overview && (
+          <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <WhatIfSimulator
+              initialNeeds={(overview.needs_plan / overview.income) * 100}
+              initialWants={(overview.wants_plan / overview.income) * 100}
+              initialAssets={(overview.assets_plan / overview.income) * 100}
+              income={overview.income}
+              onUpdate={(needs, wants, assets) => {
+                // Update local state for preview (not persisted until commit)
+                console.log('Simulated allocation:', { needs, wants, assets })
               }}
             />
-          </div>
-        </section>
+            {overview && (
+              <AllocationDonut
+                data={[
+                  {
+                    name: 'Needs',
+                    value: overview.needs_plan,
+                    color: AllocationColors.needs
+                  },
+                  {
+                    name: 'Wants',
+                    value: overview.wants_plan,
+                    color: AllocationColors.wants
+                  },
+                  {
+                    name: 'Assets',
+                    value: overview.assets_plan,
+                    color: AllocationColors.assets
+                  }
+                ]}
+                title="Current Allocation"
+              />
+            )}
+          </section>
+        )}
 
         {/* Loading State */}
         {loading && (
