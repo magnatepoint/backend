@@ -39,11 +39,11 @@ export default function AllocationDonut({ data, title = 'Budget Allocation' }: A
       <ResponsiveContainer width="100%" height={200}>
         <PieChart>
           <Pie
-            data={data}
+            data={data as any}
             cx="50%"
             cy="50%"
             labelLine={false}
-            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+            label={({ name, percent }: { name: string; percent?: number }) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
             outerRadius={70}
             fill="#8884d8"
             dataKey="value"
