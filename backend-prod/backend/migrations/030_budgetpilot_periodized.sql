@@ -215,7 +215,13 @@ BEGIN
   
   -- Return the recommendations
   RETURN QUERY
-  SELECT r.plan_code, r.score, r.needs_budget_pct, r.wants_budget_pct, r.savings_budget_pct, r.recommendation_reason, r.period_id
+  SELECT r.plan_code::text,
+         r.score,
+         r.needs_budget_pct,
+         r.wants_budget_pct,
+         r.savings_budget_pct,
+         r.recommendation_reason,
+         r.period_id
   FROM budgetpilot.user_budget_recommendation r
   WHERE r.user_id = p_user AND r.period_id = pid
   ORDER BY r.score DESC, r.plan_code ASC;
