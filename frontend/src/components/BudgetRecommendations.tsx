@@ -14,19 +14,26 @@ interface Recommendation {
 interface BudgetRecommendationsProps {
   items: Recommendation[]
   periodId: string
-  onCommit?: () => void
+  activePlanCode?: string | null
+  onCommit?: (planCode: string) => Promise<void> | void
 }
 
-export default function BudgetRecommendations({ items, periodId, onCommit }: BudgetRecommendationsProps) {
+export default function BudgetRecommendations({ items, periodId, activePlanCode, onCommit }: BudgetRecommendationsProps) {
   const [committing, setCommitting] = useState<string | null>(null)
+  const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   const handleCommit = async (planCode: string) => {
     try {
+      setStatus(null)
       setCommitting(planCode)
       await apiClient.commitFromRecommendation(periodId, planCode)
-      if (onCommit) onCommit()
+      if (onCommit) {
+        await onCommit(planCode)
+      }
+      setStatus({ type: 'success', message: `Committed plan ${planCode}` })
     } catch (error) {
       console.error('Failed to commit plan:', error)
+      setStatus({ type: 'error', message: 'Failed to commit plan. Please try again.' })
     } finally {
       setCommitting(null)
     }
@@ -46,6 +53,15 @@ export default function BudgetRecommendations({ items, periodId, onCommit }: Bud
       <div className="flex items-center justify-between mb-3">
         <h3 className="font-semibold text-white">AI Plan Recommendations</h3>
       </div>
+      {status && (
+        <div
+          className={`mb-3 rounded-lg px-3 py-2 text-sm ${
+            status.type === 'success' ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/50' : 'bg-red-500/10 text-red-300 border border-red-500/40'
+          }`}
+        >
+          {status.message}
+        </div>
+      )}
       <div className="space-y-3">
         {items.map((r) => (
           <div key={r.plan_code} className="p-3 rounded-lg bg-gray-700/30 flex items-start justify-between gap-3">
@@ -61,9 +77,9 @@ export default function BudgetRecommendations({ items, periodId, onCommit }: Bud
             <button
               className="px-3 py-2 rounded-lg bg-yellow-500 hover:bg-yellow-600 text-black text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
               onClick={() => handleCommit(r.plan_code)}
-              disabled={committing === r.plan_code}
+              disabled={committing === r.plan_code || (!!activePlanCode && activePlanCode === r.plan_code)}
             >
-              {committing === r.plan_code ? 'Committing...' : 'Commit'}
+              {committing === r.plan_code ? 'Committing...' : activePlanCode === r.plan_code ? 'Committed' : 'Commit'}
             </button>
           </div>
         ))}

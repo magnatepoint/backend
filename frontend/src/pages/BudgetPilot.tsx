@@ -302,7 +302,10 @@ export default function BudgetPilot() {
             <BudgetRecommendations
               items={recommendations}
               periodId={periodId}
-              onCommit={handleCommit}
+              activePlanCode={overview?.plan_code}
+              onCommit={async (_planCode) => {
+                await loadData()
+              }}
             />
           </div>
         </section>
