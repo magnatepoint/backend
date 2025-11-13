@@ -232,7 +232,7 @@ CREATE OR REPLACE FUNCTION budgetpilot.commit_from_recommendation(
   p_user uuid, p_period_id uuid, p_plan_code text, p_notes text DEFAULT 'Committed from suggestions'
 ) RETURNS VOID AS $$
 DECLARE income_env NUMERIC;
-DECLARE alloc_assets_pct NUMERIC;
+DECLARE v_alloc_assets_pct NUMERIC;
 BEGIN
   -- Freeze plan
   INSERT INTO budgetpilot.user_budget_commit (user_id, month, plan_code, alloc_needs_pct, alloc_wants_pct, alloc_assets_pct, notes, committed_at, period_id)
@@ -253,8 +253,8 @@ BEGIN
       committed_at=now(),
       period_id=EXCLUDED.period_id;
 
-  SELECT alloc_assets_pct INTO alloc_assets_pct
-  FROM budgetpilot.user_budget_commit
+  SELECT ubc.alloc_assets_pct INTO v_alloc_assets_pct
+  FROM budgetpilot.user_budget_commit ubc
   WHERE user_id=p_user AND period_id=p_period_id;
 
   -- Estimate income envelope for this period
@@ -288,7 +288,7 @@ BEGIN
   SELECT n.user_id,
          (SELECT date_trunc('month', period_start)::date FROM budgetpilot.budget_period WHERE period_id=p_period_id),
          n.goal_id, n.weight_pct,
-         ROUND(COALESCE(income_env,0) * COALESCE(alloc_assets_pct,0) * n.weight_pct, 2),
+         ROUND(COALESCE(income_env,0) * COALESCE(v_alloc_assets_pct,0) * n.weight_pct, 2),
          now(), p_period_id
   ON CONFLICT (user_id, month, goal_id) DO UPDATE
   SET weight_pct=EXCLUDED.weight_pct,
