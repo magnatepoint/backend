@@ -262,6 +262,245 @@ def read_excel_with_auto_header(path: str, bank_code: str):
     return df_raw
 
 
+def normalize_excel_df(df, bank_code: str) -> List[Dict[str, Any]]:
+    """
+    Bank-specific mappings: turn Excel columns into canonical fields.
+    Returns list of dicts with: txn_date, amount, direction, description, ref_no
+    """
+    import pandas as pd
+    
+    # Clean columns
+    df = df.rename(columns={c: str(c).strip().lower() for c in df.columns})
+    cols = list(df.columns)
+    logger.info(f"normalize_excel_df: bank_code={bank_code}, columns={cols}")
+    
+    # 🔍 Auto-detect bank if GENERIC and first cell contains bank name
+    try:
+        first_cell = str(df.iloc[0, 0]).lower()
+    except Exception:
+        first_cell = ""
+    
+    if bank_code.upper() == "GENERIC":
+        if "hdfc" in first_cell and "bank" in first_cell:
+            logger.info("Auto-detected HDFC from sheet content, overriding bank_code to HDFC")
+            bank_code = "HDFC"
+        elif "icici" in first_cell and "bank" in first_cell:
+            logger.info("Auto-detected ICICI from sheet content, overriding bank_code to ICICI")
+            bank_code = "ICICI"
+        elif "state bank of india" in first_cell or "sbi" in first_cell:
+            logger.info("Auto-detected SBI from sheet content, overriding bank_code to SBI")
+            bank_code = "SBI"
+    
+    mapping: Dict[str, Dict[str, str]] = {}
+    
+    # EXAMPLE per-bank mappings – adjust based on actual files
+    mapping["HDFC"] = {
+        "date": "txn_date",
+        "value date": "txn_date",
+        "value_date": "txn_date",
+        "withdrawal amt.": "debit",
+        "withdrawal_amt": "debit",
+        "deposit amt.": "credit",
+        "deposit_amt": "credit",
+        "narration": "description",
+        "chq/ref number": "ref_no",
+        "chq_ref_number": "ref_no",
+        "ref": "ref_no",
+    }
+    
+    mapping["ICICI"] = {
+        "transaction date": "txn_date",
+        "transaction_date": "txn_date",
+        "date": "txn_date",
+        "withdrawal amount (inr)": "debit",
+        "withdrawal_amount": "debit",
+        "deposit amount (inr)": "credit",
+        "deposit_amount": "credit",
+        "transaction remarks": "description",
+        "transaction_remarks": "description",
+        "remarks": "description",
+        "cheque number": "ref_no",
+        "cheque_number": "ref_no",
+    }
+    
+    mapping["SBI"] = {
+        "date": "txn_date",
+        "value date": "txn_date",
+        "withdrawal": "debit",
+        "deposit": "credit",
+        "description": "description",
+        "narration": "description",
+        "ref no": "ref_no",
+        "ref_no": "ref_no",
+    }
+    
+    # fallback generic
+    mapping["GENERIC"] = {
+        "date": "txn_date",
+        "transaction_date": "txn_date",
+        "amount": "amount",
+        "type": "direction",
+        "transaction_type": "direction",
+        "description": "description",
+        "narration": "description",
+        "ref": "ref_no",
+        "reference": "ref_no",
+        "reference_id": "ref_no",
+    }
+    
+    bank_key = bank_code.upper() if bank_code.upper() in mapping else "GENERIC"
+    bank_map = mapping[bank_key]
+    
+    # Check required cols - be more flexible with matching
+    date_cols = [k for k, v in bank_map.items() if v == "txn_date"]
+    desc_cols = [k for k, v in bank_map.items() if v == "description"]
+    
+    # Normalize column names for comparison (lowercase, strip whitespace)
+    df_cols_normalized = {str(c).strip().lower(): c for c in df.columns}
+    
+    has_date = any(col.lower().strip() in df_cols_normalized for col in date_cols)
+    has_desc = any(col.lower().strip() in df_cols_normalized for col in desc_cols)
+    
+    if not has_date or not has_desc:
+        logger.error(
+            f"Column mapping failed for {bank_key}. "
+            f"Looking for date in {date_cols}, desc in {desc_cols}. "
+            f"Available columns (normalized): {list(df_cols_normalized.keys())}"
+        )
+        raise ValueError(
+            f"No column mapping found for bank_code={bank_code}. Available columns: {list(df.columns)}"
+        )
+    
+    rows: List[Dict[str, Any]] = []
+    
+    for _, row in df.iterrows():
+        rec: Dict[str, Any] = {
+            "txn_date": None,
+            "amount": None,
+            "direction": None,
+            "description": "",
+            "ref_no": None,
+        }
+        
+        # Map columns
+        for col, val in row.items():
+            key = bank_map.get(col)
+            if not key:
+                continue
+            
+            if key == "txn_date":
+                if pd.isna(val):
+                    continue
+                if isinstance(val, (datetime, pd.Timestamp)):
+                    rec["txn_date"] = val.date()
+                else:
+                    try:
+                        rec["txn_date"] = pd.to_datetime(val).date()
+                    except:
+                        continue
+            elif key in ("debit", "credit"):
+                if pd.isna(val) or float(val) == 0:
+                    continue
+                amt = float(val)
+                rec["amount"] = amt
+                rec["direction"] = "debit" if key == "debit" else "credit"
+            elif key == "amount":
+                if pd.isna(val) or float(val) == 0:
+                    continue
+                rec["amount"] = abs(float(val))
+            else:
+                rec[key] = None if pd.isna(val) else str(val).strip()
+        
+        # Derive direction for generic (single amount + type column)
+        if bank_key == "GENERIC" and rec["direction"] is None:
+            type_val = str(row.get("type", "")).lower() if "type" in row else ""
+            if type_val.startswith("d") or type_val.startswith("debit"):
+                rec["direction"] = "debit"
+            elif type_val.startswith("c") or type_val.startswith("credit"):
+                rec["direction"] = "credit"
+            elif rec["amount"]:
+                # Try to infer from amount sign (if negative, likely debit)
+                # But we already have abs, so check original
+                orig_amt = row.get("amount")
+                if orig_amt and float(orig_amt) < 0:
+                    rec["direction"] = "debit"
+                    rec["amount"] = abs(float(orig_amt))
+                else:
+                    rec["direction"] = "credit"
+        
+        if not rec["txn_date"] or rec["amount"] is None or not rec["direction"]:
+            # skip blank / header rows
+            continue
+        
+        rows.append(rec)
+    
+    return rows
+
+
+def apply_categorization_rules(
+    session,
+    rows: List[Dict[str, Any]],
+    bank_code: str
+) -> List[Dict[str, Any]]:
+    """Apply categorization rules from enrichment.txn_categorization_rule table"""
+    if not rows:
+        return []
+    
+    # Load rules once
+    rule_rows = session.execute(text("""
+        SELECT rule_id, bank_code, match_field, match_type, match_value,
+               direction, primary_category, sub_category, priority
+        FROM enrichment.txn_categorization_rule
+        WHERE is_active = TRUE
+          AND (bank_code = :bank_code OR bank_code IS NULL)
+        ORDER BY priority ASC
+    """), {"bank_code": bank_code}).mappings().all()
+    
+    rules = [dict(r) for r in rule_rows]
+    
+    categorized: List[Dict[str, Any]] = []
+    
+    for r in rows:
+        primary = "uncategorized"
+        sub = "uncategorized"
+        
+        for rule in rules:
+            # direction filter
+            if rule["direction"] and rule["direction"] != r["direction"]:
+                continue
+            
+            field_name = rule["match_field"]
+            haystack = (r.get(field_name) or "").lower()
+            
+            if not haystack:
+                continue
+            
+            pat = (rule["match_value"] or "").lower()
+            
+            matched = False
+            if rule["match_type"] == "contains":
+                matched = pat in haystack
+            elif rule["match_type"] == "startswith":
+                matched = haystack.startswith(pat)
+            elif rule["match_type"] == "regex":
+                try:
+                    if re.search(rule["match_value"], haystack, re.IGNORECASE):
+                        matched = True
+                except re.error:
+                    matched = False
+            
+            if matched:
+                primary = rule["primary_category"]
+                sub = rule["sub_category"]
+                break  # respect priority
+        
+        r["primary_category"] = primary
+        r["sub_category"] = sub
+        categorized.append(r)
+    
+    return categorized
+
+
 def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, path: str, bank_code: str = "GENERIC") -> Tuple[int, int, int]:
     """Synchronous Excel parsing and staging with bank-specific normalization and categorization"""
     import pandas as pd
