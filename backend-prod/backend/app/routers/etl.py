@@ -1265,7 +1265,6 @@ async def upload_pdf_etl(
         # Real 500
         logger.exception(f"Error processing PDF upload: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process PDF file: {str(e)}")
-        raise
     except Exception as e:
         if temp_path:
             try:
