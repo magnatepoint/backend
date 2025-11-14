@@ -1265,14 +1265,6 @@ async def upload_pdf_etl(
         # Real 500
         logger.exception(f"Error processing PDF upload: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process PDF file: {str(e)}")
-    except Exception as e:
-        if temp_path:
-            try:
-                os.remove(temp_path)
-            except Exception:
-                pass
-        logger.exception(f"Error processing PDF upload: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process PDF file: {str(e)}")
 
 
 @router.get("/batches/{batch_id}", response_model=BatchStatusResponse)
