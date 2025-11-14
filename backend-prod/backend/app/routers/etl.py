@@ -229,12 +229,12 @@ def normalize_excel_df(df, bank_code: str) -> List[Dict[str, Any]]:
     df_cols_list = list(df_cols_normalized.keys())
     
     # Fuzzy check: look for date and description keywords in any column
-    has_date = any(
+    has_date = (
         any("date" in col and ("value" in col or col == "date") for col in df_cols_list)
         or any(col in df_cols_list for col in date_cols)
     )
-    has_desc = any(
-        any(x in col for x in ["narration", "description", "particulars", "remarks"] for col in df_cols_list)
+    has_desc = (
+        any(any(x in col for x in ["narration", "description", "particulars", "remarks"]) for col in df_cols_list)
         or any(col in df_cols_list for col in desc_cols)
     )
     
