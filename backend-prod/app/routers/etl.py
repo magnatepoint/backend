@@ -496,17 +496,26 @@ def apply_categorization_rules(
     if not rows:
         return []
     
-    # Load rules once
-    rule_rows = session.execute(text("""
-        SELECT rule_id, bank_code, match_field, match_type, match_value,
-               direction, primary_category, sub_category, priority
-        FROM enrichment.txn_categorization_rule
-        WHERE is_active = TRUE
-          AND (bank_code = :bank_code OR bank_code IS NULL)
-        ORDER BY priority ASC
-    """), {"bank_code": bank_code}).mappings().all()
-    
-    rules = [dict(r) for r in rule_rows]
+    # Load rules once - handle case where table doesn't exist yet
+    try:
+        rule_rows = session.execute(text("""
+            SELECT rule_id, bank_code, match_field, match_type, match_value,
+                   direction, primary_category, sub_category, priority
+            FROM enrichment.txn_categorization_rule
+            WHERE is_active = TRUE
+              AND (bank_code = :bank_code OR bank_code IS NULL)
+            ORDER BY priority ASC
+        """), {"bank_code": bank_code}).mappings().all()
+        
+        rules = [dict(r) for r in rule_rows]
+    except Exception as e:
+        # Table doesn't exist yet - log warning and continue without categorization
+        logger.warning(
+            f"Categorization rules table not found: {e}. "
+            f"Transactions will be imported as 'uncategorized'. "
+            f"Run migration 026_excel_categorization_rules.sql to enable categorization."
+        )
+        rules = []
     
     categorized: List[Dict[str, Any]] = []
     
