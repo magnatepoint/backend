@@ -1127,29 +1127,6 @@ async def upload_xlsx_etl(
             batch_id=str(batch_id),
             records_staged=0
         )
-    except HTTPException:
-        # If lower layer raised an HTTPException, just bubble it up
-        try:
-            os.remove(path)
-        except Exception:
-            pass
-        raise
-    except ValueError as e:
-        # Normalize to 400 for validation errors
-        try:
-            os.remove(path)
-        except Exception:
-            pass
-        logger.error(f"Excel validation error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        # Everything else is a real 500
-        try:
-            os.remove(path)
-        except Exception:
-            pass
-        logger.exception(f"Error processing Excel upload: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process Excel file: {str(e)}")
 
 
 @router.post("/upload/pdf", response_model=ETLResponse)
