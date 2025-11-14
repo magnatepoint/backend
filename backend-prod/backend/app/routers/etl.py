@@ -1058,14 +1058,43 @@ async def upload_xlsx_etl(
     
     logger.info(f"XLSX upload batch created: {batch_id} for user {user.user_id}, bank_code: {bank_code}, size: {size}")
     
-    # Try to get worker task
+    # Try to dispatch to Celery worker
     try:
-        from app.workers.xls_worker import parse_xls
-    except Exception:
-        parse_xls = None  # No worker available
+        from app.workers.etl_worker import process_excel_etl
+        from celery import current_app
+        
+        # Read file content for worker
+        with open(path, "rb") as f:
+            file_content = f.read()
+        
+        # Dispatch to worker
+        task = process_excel_etl.delay(
+            user_id=str(user.user_id),
+            batch_id=str(batch_id),
+            file_name=file.filename or "upload.xlsx",
+            file_content=file_content,
+            bank_code=bank_code
+        )
+        
+        logger.info(f"Dispatched Excel ETL to worker: task_id={task.id}, batch={batch_id}")
+        
+        # Cleanup temp file (worker has its own copy)
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        
+        return ETLResponse(
+            message="File received. Processing in background.",
+            batch_id=str(batch_id),
+            records_staged=0
+        )
+    except Exception as e:
+        logger.warning(f"Worker dispatch failed, falling back to sync processing: {e}")
+        # Fallback to sync processing
+        pass
     
-    # For now, use sync fallback with bank_code
-    # TODO: Update worker to accept bank_code parameter
+    # Sync fallback
     try:
         records_staged, valid, invalid = _sync_parse_and_stage_excel(
             str(user.user_id),
@@ -1147,15 +1176,55 @@ async def upload_pdf_etl(
     
     logger.info(f"PDF upload batch created: {batch_id} for user {user.user_id}, bank_code: {bank_code}, size: {len(raw_bytes)}")
     
+    # Try to dispatch to Celery worker
     try:
+        from app.workers.etl_worker import process_pdf_etl
+        
+        # Dispatch to worker
+        task = process_pdf_etl.delay(
+            user_id=str(user.user_id),
+            batch_id=str(batch_id),
+            file_name=file.filename or "upload.pdf",
+            file_content=raw_bytes,
+            bank_code=bank_code,
+            password=password
+        )
+        
+        logger.info(f"Dispatched PDF ETL to worker: task_id={task.id}, batch={batch_id}")
+        
+        return ETLResponse(
+            message="File received. Processing in background.",
+            batch_id=str(batch_id),
+            records_staged=0
+        )
+    except Exception as e:
+        logger.warning(f"Worker dispatch failed, falling back to sync processing: {e}")
+        # Fallback to sync processing
+        pass
+    
+    # Sync fallback - save to temp file
+    import tempfile
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(raw_bytes)
+            temp_path = tmp.name
+        
         records_staged, valid, invalid = _sync_parse_and_stage_pdf(
             str(user.user_id),
             str(batch_id),
             file.filename or "upload.pdf",
-            raw_bytes,
+            temp_path,
             bank_code,
             password
         )
+        
+        # Cleanup temp file
+        try:
+            if temp_path:
+                os.remove(temp_path)
+        except Exception:
+            pass
         
         return ETLResponse(
             message=f"Upload processed: {valid} valid, {invalid} invalid",
@@ -1163,8 +1232,18 @@ async def upload_pdf_etl(
             records_staged=records_staged,
         )
     except HTTPException:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
         raise
     except Exception as e:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
         logger.exception(f"Error processing PDF upload: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process PDF file: {str(e)}")
 

@@ -8,7 +8,8 @@ celery_app = Celery(
     include=[
         "app.workers.pdf_worker",
         "app.workers.csv_worker",
-        "app.workers.ml_worker"
+        "app.workers.ml_worker",
+        "app.workers.etl_worker"
     ]
 )
 
