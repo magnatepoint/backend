@@ -247,9 +247,51 @@ def normalize_excel_df(df, bank_code: str) -> List[Dict[str, Any]]:
             "ref_no": None,
         }
         
-        # Map columns
+        # Map columns with fuzzy matching
         for col, val in row.items():
-            key = bank_map.get(col)
+            col_norm = str(col).strip().lower()
+            
+            # 1) try exact mapping
+            key = bank_map.get(col_norm)
+            
+            # 2) fuzzy mapping for typical bank patterns
+            if not key:
+                if bank_key == "HDFC":
+                    if "date" in col_norm and ("value" in col_norm or col_norm == "date"):
+                        key = "txn_date"
+                    elif "narration" in col_norm or "description" in col_norm or "particulars" in col_norm:
+                        key = "description"
+                    elif "withdrawal" in col_norm or ("debit" in col_norm and "amount" in col_norm):
+                        key = "debit"
+                    elif "deposit" in col_norm or ("credit" in col_norm and "amount" in col_norm):
+                        key = "credit"
+                    elif "chq" in col_norm or "ref" in col_norm:
+                        key = "ref_no"
+                
+                elif bank_key == "ICICI":
+                    if "transaction date" in col_norm or col_norm == "date":
+                        key = "txn_date"
+                    elif "remarks" in col_norm or "description" in col_norm:
+                        key = "description"
+                    elif "withdrawal" in col_norm or ("debit" in col_norm and "amount" in col_norm):
+                        key = "debit"
+                    elif "deposit" in col_norm or ("credit" in col_norm and "amount" in col_norm):
+                        key = "credit"
+                    elif "cheque" in col_norm or "ref" in col_norm:
+                        key = "ref_no"
+                
+                elif bank_key == "SBI":
+                    if "date" in col_norm:
+                        key = "txn_date"
+                    elif "narration" in col_norm or "description" in col_norm:
+                        key = "description"
+                    elif "withdrawal" in col_norm or ("debit" in col_norm and "amount" in col_norm):
+                        key = "debit"
+                    elif "deposit" in col_norm or ("credit" in col_norm and "amount" in col_norm):
+                        key = "credit"
+                    elif "ref" in col_norm:
+                        key = "ref_no"
+            
             if not key:
                 continue
             
@@ -512,6 +554,10 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
         
         # Normalize Excel columns → canonical fields
         rows = normalize_excel_df(df, bank_code)
+        
+        logger.info(f"Excel normalize produced {len(rows)} canonical rows for bank_code={bank_code}")
+        if rows:
+            logger.info(f"Sample row[0]: {rows[0]}")
         
         # Categorize each row using rules table
         categorized_rows = apply_categorization_rules(session, rows, bank_code)
