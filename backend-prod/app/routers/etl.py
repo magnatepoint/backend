@@ -786,48 +786,96 @@ def parse_excel_generic_rows(df) -> List[Dict[str, Any]]:
     # Normalize all cells to string and fill NaNs
     df_str = df.fillna("").astype(str)
     
-    # Same pattern as parse_pdf_generic_lines
-    pattern = re.compile(
-        r"(?P<date>\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+"
-        r"(?P<desc>.+?)\s+"
-        r"(?P<amount>[0-9,]+\.?\d{0,2})\s+"
-        r"(?P<dc>DR|CR|DEBIT|CREDIT)",
-        re.IGNORECASE,
-    )
+    # More flexible patterns - try multiple variations
+    patterns = [
+        # Pattern 1: DD/MM/YYYY description amount DR/CR (with spaces)
+        re.compile(
+            r"(?P<date>\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+(?P<desc>.+?)\s+(?P<amount>[0-9,]+\.?\d{0,2})\s+(?P<dc>DR|CR|DEBIT|CREDIT)",
+            re.IGNORECASE,
+        ),
+        # Pattern 2: DD/MM/YYYY description amount (DR/CR at end, no space before)
+        re.compile(
+            r"(?P<date>\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+(?P<desc>.+?)\s+(?P<amount>[0-9,]+\.?\d{0,2})(?P<dc>DR|CR|DEBIT|CREDIT)",
+            re.IGNORECASE,
+        ),
+        # Pattern 3: Date might be in different position, amount with or without decimals, optional DR/CR
+        re.compile(
+            r"(?P<date>\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+(?P<desc>.+?)\s+(?P<amount>[0-9,]+)\s*(?P<dc>DR|CR|DEBIT|CREDIT)?",
+            re.IGNORECASE,
+        ),
+    ]
     
-    for _, row in df_str.iterrows():
+    lines_processed = 0
+    lines_matched = 0
+    
+    for idx, row in df_str.iterrows():
         # Join all columns into one line like "col0 col1 col2 ..."
-        line = " ".join([v.strip() for v in row.values if v and v.strip()])
-        if not line:
+        line = " ".join([v.strip() for v in row.values if v and v.strip() and str(v).strip() not in ("", "nan", "None")])
+        if not line or len(line) < 10:  # Skip very short lines
             continue
         
-        m = pattern.search(line)
+        lines_processed += 1
+        
+        # Try each pattern
+        m = None
+        for pattern in patterns:
+            m = pattern.search(line)
+            if m:
+                break
+        
         if not m:
+            # Log first few non-matching lines for debugging
+            if lines_processed <= 5:
+                logger.debug(f"Generic parser: line {idx} didn't match any pattern: {line[:100]}")
             continue
+        
+        lines_matched += 1
         
         dt_raw = m.group("date")
         desc = m.group("desc").strip()
-        amt_raw = m.group("amount").replace(",", "")
-        dc = m.group("dc").upper()
+        amt_raw = m.group("amount").replace(",", "").strip()
+        dc = m.group("dc") if m.group("dc") else ""
+        dc = dc.upper() if dc else ""
+        
+        # If no DR/CR found, try to infer from context or default to debit
+        if not dc:
+            # Some banks use negative amounts for debits
+            try:
+                amt_val = float(amt_raw)
+                if amt_val < 0:
+                    dc = "DR"
+                    amt_raw = str(abs(amt_val))
+                else:
+                    # Default to credit if positive and no indicator
+                    dc = "CR"
+            except:
+                continue
         
         try:
-            # Try DD/MM/YYYY first, then DD-MM-YYYY
-            try:
-                dt = datetime.strptime(dt_raw, "%d/%m/%Y").date()
-            except ValueError:
+            # Try DD/MM/YYYY first, then DD-MM-YYYY, then other formats
+            dt = None
+            for fmt in ["%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d-%m-%y", "%Y-%m-%d", "%d.%m.%Y", "%d.%m.%y"]:
                 try:
-                    dt = datetime.strptime(dt_raw, "%d/%m/%y").date()
+                    dt = datetime.strptime(dt_raw, fmt).date()
+                    break
                 except ValueError:
-                    try:
-                        dt = datetime.strptime(dt_raw, "%d-%m-%Y").date()
-                    except ValueError:
-                        dt = datetime.strptime(dt_raw, "%d-%m-%y").date()
-        except ValueError:
+                    continue
+            if not dt:
+                if lines_matched <= 3:
+                    logger.debug(f"Could not parse date: {dt_raw}")
+                continue
+        except Exception as e:
+            if lines_matched <= 3:
+                logger.debug(f"Date parsing error for {dt_raw}: {e}")
             continue
         
         try:
             amount = float(amt_raw)
+            if amount <= 0:
+                continue  # Skip zero or negative amounts (unless we already handled sign)
         except ValueError:
+            if lines_matched <= 3:
+                logger.debug(f"Could not parse amount: {amt_raw}")
             continue
         
         direction = "debit" if dc in ("DR", "DEBIT") else "credit"
@@ -839,6 +887,10 @@ def parse_excel_generic_rows(df) -> List[Dict[str, Any]]:
             "description": desc,
             "ref_no": None,
         })
+    
+    logger.info(f"Generic Excel parser: processed {lines_processed} lines, matched {lines_matched} transactions")
+    if rows and len(rows) > 0:
+        logger.info(f"Sample extracted row: {rows[0]}")
     
     return rows
 
