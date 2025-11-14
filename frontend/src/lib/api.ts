@@ -1184,6 +1184,44 @@ class ApiClient {
     }>(`/api/goalcompass/contributions${query ? `?${query}` : ''}`)
   }
 
+  // Goal Coach APIs
+  async getGoalCoach(month?: string) {
+    return this.request<{
+      month: string
+      summary: string
+      tips: string[]
+      quick_actions: Array<{
+        type: string
+        goal_id: string
+        goal_name: string
+        month: string
+        recommended_extra: number
+      }>
+    }>(`/api/goalcoach/coach${month ? `?month=${month}` : ''}`)
+  }
+
+  async simulateGoal(payload: {
+    goal_id: string
+    monthly_contribution: number
+    as_of_date?: string
+  }) {
+    return this.request<{
+      goal_id: string
+      goal_name: string
+      remaining_amount: number
+      current_months_remaining: number | null
+      simulated_months_remaining: number
+      acceleration_months: number | null
+      simulated_target_date: string | null
+      suggested_monthly_need: number
+      monthly_contribution: number
+    }>('/api/goalcoach/simulate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+  }
+
   // MoneyMoments APIs
   async getMoneyMomentsTraits() {
     return this.request<{

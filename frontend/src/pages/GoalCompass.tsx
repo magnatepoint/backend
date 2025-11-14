@@ -3,6 +3,33 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recha
 import { apiClient } from '../lib/api'
 import { formatCurrency, formatDate } from '../lib/utils'
 
+interface GoalCoachQuickAction {
+  type: string
+  goal_id: string
+  goal_name: string
+  month: string
+  recommended_extra: number
+}
+
+interface GoalCoachResponse {
+  month: string
+  summary: string
+  tips: string[]
+  quick_actions: GoalCoachQuickAction[]
+}
+
+interface GoalSimulationResult {
+  goal_id: string
+  goal_name: string
+  remaining_amount: number
+  current_months_remaining: number | null
+  simulated_months_remaining: number
+  acceleration_months: number | null
+  simulated_target_date: string | null
+  suggested_monthly_need: number
+  monthly_contribution: number
+}
+
 interface GoalProgress {
   goal_id: string
   goal_name: string
@@ -70,6 +97,21 @@ interface CatalogItem {
   context_hint?: string | null
 }
 
+// Client helpers for Goal Coach and Simulator
+async function fetchGoalCoach(month?: string): Promise<GoalCoachResponse> {
+  const res = await apiClient.getGoalCoach(month)
+  return res
+}
+
+async function simulateGoalApi(payload: {
+  goal_id: string
+  monthly_contribution: number
+  as_of_date?: string
+}): Promise<GoalSimulationResult> {
+  const res = await apiClient.simulateGoal(payload)
+  return res
+}
+
 export default function GoalCompass() {
   const [goalProgress, setGoalProgress] = useState<GoalProgress[]>([])
   const [dashboard, setDashboard] = useState<DashboardData | null>(null)
@@ -110,6 +152,16 @@ export default function GoalCompass() {
   })
   const [creating, setCreating] = useState(false)
 
+  // coach
+  const [coachData, setCoachData] = useState<GoalCoachResponse | null>(null)
+  const [coachLoading, setCoachLoading] = useState(false)
+  const [coachError, setCoachError] = useState<string | null>(null)
+
+  // simulator
+  const [simGoal, setSimGoal] = useState<GoalSimulationResult | null>(null)
+  const [simInput, setSimInput] = useState<string>('')   // current input value
+  const [simLoading, setSimLoading] = useState(false)
+
   const loadAllData = useCallback(async () => {
     try {
       setLoading(true)
@@ -146,6 +198,27 @@ export default function GoalCompass() {
   useEffect(() => {
     loadAllData()
   }, [loadAllData])
+
+  // Load Coach data whenever month changes
+  useEffect(() => {
+    let mounted = true
+    setCoachLoading(true)
+    setCoachError(null)
+    fetchGoalCoach(selectedMonth)
+      .then((res) => {
+        if (!mounted) return
+        setCoachData(res)
+      })
+      .catch((err: any) => {
+        if (!mounted) return
+        setCoachError(err?.message || 'Failed to load coach insights')
+      })
+      .finally(() => mounted && setCoachLoading(false))
+
+    return () => {
+      mounted = false
+    }
+  }, [selectedMonth])
 
   // Load goal catalog when modal opens
   useEffect(() => {
@@ -235,6 +308,37 @@ export default function GoalCompass() {
       goal_name: item.goal_name,
       goal_type: item.default_horizon as 'short_term' | 'medium_term' | 'long_term'
     })
+  }
+
+  // Helper to run simulation + handle quick action
+  const runSimulation = async (goalId: string, monthly: number) => {
+    if (!monthly || monthly <= 0) return
+    try {
+      setSimLoading(true)
+      const res = await simulateGoalApi({
+        goal_id: goalId,
+        monthly_contribution: monthly,
+        as_of_date: selectedMonth,
+      })
+      setSimGoal(res)
+    } catch (err: any) {
+      console.error('simulate error', err)
+      alert(err?.message || 'Failed to simulate')
+    } finally {
+      setSimLoading(false)
+    }
+  }
+
+  const handleCoachQuickAction = async (action: GoalCoachQuickAction) => {
+    const goal = goalProgress.find((g) => g.goal_id === action.goal_id)
+    if (!goal) return
+
+    // focus this goal and prefill simulator
+    setSelectedGoal(action.goal_id)
+    const base = goal.suggested_monthly_need || 0
+    const monthly = base + action.recommended_extra
+    setSimInput(String(Math.round(monthly)))
+    await runSimulation(action.goal_id, monthly)
   }
 
   const handleGoalClick = async (goalId: string) => {
@@ -381,6 +485,69 @@ export default function GoalCompass() {
             </button>
           </div>
         )}
+
+        {/* Goal Coach – inline on GoalCompass page */}
+        <div className="mb-6">
+          <div className="bg-gray-800 rounded-xl p-4 sm:p-5 border border-gray-700">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-sm sm:text-base font-semibold text-yellow-400 flex items-center gap-2">
+                <span>🧭</span> Goal Coach
+              </h2>
+              <span className="text-[11px] text-gray-400">{selectedMonth}</span>
+            </div>
+
+            {coachLoading && (
+              <p className="text-xs text-gray-400">Analysing your goals for this month…</p>
+            )}
+
+            {coachError && (
+              <p className="text-xs text-red-400">Error: {coachError}</p>
+            )}
+
+            {!coachLoading && !coachError && coachData && (
+              <>
+                <p className="text-xs text-gray-400 mb-3">{coachData.summary}</p>
+                <ul className="space-y-2 mb-4">
+                  {coachData.tips.map((tip, idx) => (
+                    <li key={idx} className="text-xs text-gray-200 flex gap-2">
+                      <span className="mt-0.5 text-yellow-400">•</span>
+                      <span>{tip}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                {coachData.quick_actions.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[11px] uppercase tracking-wide text-gray-400">
+                      Quick actions
+                    </p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {coachData.quick_actions.map((a) => (
+                        <button
+                          key={`${a.goal_id}-${a.month}`}
+                          onClick={() => handleCoachQuickAction(a)}
+                          className="text-left text-xs px-3 py-2 bg-yellow-500/10 border border-yellow-500/40 rounded-lg hover:bg-yellow-500/20 transition-colors"
+                        >
+                          Boost <span className="font-semibold">{a.goal_name}</span> by{' '}
+                          <span className="font-semibold">
+                            {formatCurrency(a.recommended_extra)}
+                          </span>{' '}
+                          per month
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {coachData.quick_actions.length === 0 && (
+                  <p className="text-[11px] text-gray-400">
+                    No urgent changes needed. Stay consistent with your current plan.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        </div>
 
         {/* Dashboard Stats */}
         {dashboard && (
@@ -650,14 +817,102 @@ export default function GoalCompass() {
                       <p className="text-sm text-gray-300 mt-4 italic">💡 {goal.commentary}</p>
                     )}
 
-                    <p className="text-xs text-gray-500 mt-2">
-                      {isExpanded ? 'Click to collapse' : 'Click to expand for milestones and contributions'}
-                    </p>
+                    <div className="flex items-center gap-2 mt-2">
+                      <p className="text-xs text-gray-500">
+                        {isExpanded ? 'Click to collapse' : 'Click to expand for milestones and contributions'}
+                      </p>
+                      <button
+                        className="text-[11px] px-3 py-1 rounded-full border border-yellow-500/60 text-yellow-300 hover:bg-yellow-500/10"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          // Expand goal if not already expanded
+                          if (!expandedGoals.has(goal.goal_id)) {
+                            setExpandedGoals(prev => new Set(prev).add(goal.goal_id))
+                            handleGoalClick(goal.goal_id)
+                          }
+                          setSelectedGoal(goal.goal_id)
+                          const base = goal.suggested_monthly_need || 0
+                          setSimInput(base ? String(Math.round(base)) : '')
+                          if (base > 0) {
+                            runSimulation(goal.goal_id, base)
+                          } else {
+                            setSimGoal(null)
+                          }
+                        }}
+                      >
+                        ⚙️ What-if monthly
+                      </button>
+                    </div>
                   </div>
 
                   {/* Expanded Details */}
                   {isExpanded && (
                     <div className="mt-6 pt-6 border-t border-gray-700 space-y-6">
+                      {/* What-if simulator */}
+                      {selectedGoal === goal.goal_id && (
+                        <div className="mb-6 p-4 rounded-lg bg-gray-900/60 border border-gray-700">
+                          <h4 className="text-sm font-semibold text-yellow-400 mb-3 flex items-center gap-2">
+                            <span>🧮</span> What-if simulator
+                          </h4>
+                          <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-end mb-3">
+                            <div className="flex-1">
+                              <label className="block text-[11px] text-gray-400 mb-1">
+                                Monthly contribution for this goal (₹)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={simInput}
+                                onChange={(e) => setSimInput(e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-sm"
+                                placeholder={
+                                  goal.suggested_monthly_need
+                                    ? `Suggested ~${formatCurrency(goal.suggested_monthly_need)}`
+                                    : 'Enter an amount'
+                                }
+                              />
+                            </div>
+                            <button
+                              disabled={simLoading || !simInput}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                runSimulation(goal.goal_id, Number(simInput || 0))
+                              }}
+                              className="px-4 py-2 bg-yellow-500 text-black rounded-lg text-sm font-semibold disabled:opacity-50"
+                            >
+                              {simLoading ? 'Simulating…' : 'Run Simulation'}
+                            </button>
+                          </div>
+
+                          {simGoal && simGoal.goal_id === goal.goal_id && (
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-gray-300">
+                              <div className="p-3 rounded-lg bg-gray-800 border border-gray-700">
+                                <p className="text-gray-400 mb-1">Simulated months to finish</p>
+                                <p className="text-lg font-bold text-yellow-400">
+                                  {simGoal.simulated_months_remaining}
+                                </p>
+                              </div>
+                              <div className="p-3 rounded-lg bg-gray-800 border border-gray-700">
+                                <p className="text-gray-400 mb-1">New target (approx)</p>
+                                <p className="text-sm font-semibold">
+                                  {simGoal.simulated_target_date
+                                    ? formatDate(simGoal.simulated_target_date)
+                                    : '—'}
+                                </p>
+                              </div>
+                              <div className="p-3 rounded-lg bg-gray-800 border border-gray-700">
+                                <p className="text-gray-400 mb-1">Time saved vs current</p>
+                                <p className="text-sm font-semibold text-green-400">
+                                  {simGoal.acceleration_months != null
+                                    ? `${simGoal.acceleration_months} month(s)`
+                                    : '—'}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       {/* Milestones */}
                       {goalMilestones.length > 0 && (
                         <div>
