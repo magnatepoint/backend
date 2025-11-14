@@ -9,7 +9,7 @@ from collections import defaultdict
 from app.routers.auth import get_current_user, UserDep
 from app.models.spendsense_models import TxnFact, TxnEnriched, TxnStaging
 from app.database.postgresql import sync_engine, SessionLocal
-from sqlalchemy import func, and_, text
+from sqlalchemy import func, and_, text, case
 from sqlalchemy.orm import sessionmaker
 from decimal import Decimal
 import json
@@ -1665,7 +1665,7 @@ async def get_goal_impact(
         # Get active goals
         goals = session.execute(text("""
             SELECT goal_id, goal_name, target_amount, current_amount, target_date
-            FROM goals.user_goals_master
+            FROM goal.user_goals_master
             WHERE user_id = :uid AND status = 'active'
         """), {"uid": str(user_uuid)}).fetchall()
         
@@ -1738,8 +1738,8 @@ async def get_cashflow_projection(
         
         monthly_data = session.query(
             func.date_trunc('month', TxnFact.txn_date).label('month'),
-            func.sum(func.case((TxnFact.direction == 'credit', TxnFact.amount), else_=0)).label('income'),
-            func.sum(func.case((TxnFact.direction == 'debit', TxnFact.amount), else_=0)).label('expenses')
+            func.sum(case((TxnFact.direction == 'credit', TxnFact.amount), else_=0)).label('income'),
+            func.sum(case((TxnFact.direction == 'debit', TxnFact.amount), else_=0)).label('expenses')
         ).outerjoin(
             TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id
         ).filter(
@@ -1758,7 +1758,7 @@ async def get_cashflow_projection(
         
         # Get current balance (simplified: sum of all transactions)
         all_net = session.query(
-            func.sum(func.case((TxnFact.direction == 'credit', TxnFact.amount), else_=-TxnFact.amount))
+            func.sum(case((TxnFact.direction == 'credit', TxnFact.amount), else_=-TxnFact.amount))
         ).outerjoin(
             TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id
         ).filter(
