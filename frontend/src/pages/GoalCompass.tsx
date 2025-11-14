@@ -20,12 +20,10 @@ interface GoalCoachResponse {
 
 interface GoalSimulationResult {
   goal_id: string
-  goal_name: string
   remaining_amount: number
-  current_months_remaining: number | null
   simulated_months_remaining: number
-  acceleration_months: number | null
   simulated_target_date: string | null
+  acceleration_months: number | null
   suggested_monthly_need: number
   monthly_contribution: number
 }
@@ -97,19 +95,40 @@ interface CatalogItem {
   context_hint?: string | null
 }
 
-// Client helpers for Goal Coach and Simulator
+// Client helpers for Goal Coach
 async function fetchGoalCoach(month?: string): Promise<GoalCoachResponse> {
   const res = await apiClient.getGoalCoach(month)
   return res
 }
 
-async function simulateGoalApi(payload: {
-  goal_id: string
-  monthly_contribution: number
-  as_of_date?: string
-}): Promise<GoalSimulationResult> {
-  const res = await apiClient.simulateGoal(payload)
-  return res
+// Simple helper using fetch so we don't touch apiClient
+async function runGoalSimulation(
+  goal_id: string,
+  monthly_contribution: number,
+  as_of_date: string
+): Promise<GoalSimulationResult> {
+  // Get auth token
+  const { supabase } = await import('../lib/supabase')
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session?.access_token) {
+    throw new Error('No authentication token available')
+  }
+
+  // @ts-expect-error - Vite env variables
+  const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://backend.mallaapp.org'
+  const res = await fetch(`${API_BASE_URL}/api/goalcoach/simulate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${session.access_token}`
+    },
+    body: JSON.stringify({ goal_id, monthly_contribution, as_of_date })
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || 'Failed to simulate')
+  }
+  return res.json()
 }
 
 export default function GoalCompass() {
@@ -157,9 +176,10 @@ export default function GoalCompass() {
   const [coachLoading, setCoachLoading] = useState(false)
   const [coachError, setCoachError] = useState<string | null>(null)
 
-  // simulator
+  // what-if simulator
   const [simGoal, setSimGoal] = useState<GoalSimulationResult | null>(null)
-  const [simInput, setSimInput] = useState<string>('')   // current input value
+  const [simGoalId, setSimGoalId] = useState<string | null>(null)
+  const [simInput, setSimInput] = useState<string>('') // monthly amount as text
   const [simLoading, setSimLoading] = useState(false)
 
   const loadAllData = useCallback(async () => {
@@ -310,20 +330,19 @@ export default function GoalCompass() {
     })
   }
 
-  // Helper to run simulation + handle quick action
-  const runSimulation = async (goalId: string, monthly: number) => {
-    if (!monthly || monthly <= 0) return
+  const triggerSimulation = async (goalId: string, amount: number) => {
+    if (!amount || amount <= 0) {
+      alert('Enter a monthly amount > 0')
+      return
+    }
     try {
       setSimLoading(true)
-      const res = await simulateGoalApi({
-        goal_id: goalId,
-        monthly_contribution: monthly,
-        as_of_date: selectedMonth,
-      })
-      setSimGoal(res)
+      const result = await runGoalSimulation(goalId, amount, selectedMonth)
+      setSimGoal(result)
+      setSimGoalId(goalId)
     } catch (err: any) {
-      console.error('simulate error', err)
-      alert(err?.message || 'Failed to simulate')
+      console.error('Simulation error', err)
+      alert(err?.message || 'Failed to run simulation')
     } finally {
       setSimLoading(false)
     }
@@ -338,7 +357,8 @@ export default function GoalCompass() {
     const base = goal.suggested_monthly_need || 0
     const monthly = base + action.recommended_extra
     setSimInput(String(Math.round(monthly)))
-    await runSimulation(action.goal_id, monthly)
+    setSimGoalId(action.goal_id)
+    await triggerSimulation(action.goal_id, monthly)
   }
 
   const handleGoalClick = async (goalId: string) => {
@@ -817,39 +837,35 @@ export default function GoalCompass() {
                       <p className="text-sm text-gray-300 mt-4 italic">💡 {goal.commentary}</p>
                     )}
 
-                    <div className="flex items-center gap-2 mt-2">
-                      <p className="text-xs text-gray-500">
-                        {isExpanded ? 'Click to collapse' : 'Click to expand for milestones and contributions'}
-                      </p>
-                      <button
-                        className="text-[11px] px-3 py-1 rounded-full border border-yellow-500/60 text-yellow-300 hover:bg-yellow-500/10"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          // Expand goal if not already expanded
-                          if (!expandedGoals.has(goal.goal_id)) {
-                            setExpandedGoals(prev => new Set(prev).add(goal.goal_id))
-                            handleGoalClick(goal.goal_id)
-                          }
-                          setSelectedGoal(goal.goal_id)
-                          const base = goal.suggested_monthly_need || 0
-                          setSimInput(base ? String(Math.round(base)) : '')
-                          if (base > 0) {
-                            runSimulation(goal.goal_id, base)
-                          } else {
-                            setSimGoal(null)
-                          }
-                        }}
-                      >
-                        ⚙️ What-if monthly
-                      </button>
-                    </div>
+                    <p className="text-xs text-gray-500 mt-2">
+                      {isExpanded ? 'Click to collapse' : 'Click to expand for milestones and contributions'}
+                    </p>
+                  </div>
+
+                  {/* Quick what-if trigger (keeps everything on GoalCompass page) */}
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    <button
+                      className="px-3 py-1 rounded-full border border-yellow-500/60 text-yellow-300 hover:bg-yellow-500/10"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setSelectedGoal(goal.goal_id)
+                        // default to suggested monthly need if available
+                        const suggested = goal.suggested_monthly_need || 0
+                        const defaultAmount = suggested > 0 ? Math.round(suggested) : 0
+                        setSimInput(defaultAmount ? String(defaultAmount) : '')
+                        setSimGoal(null)
+                        setSimGoalId(goal.goal_id)
+                      }}
+                    >
+                      ⚙️ What-if: monthly amount
+                    </button>
                   </div>
 
                   {/* Expanded Details */}
                   {isExpanded && (
                     <div className="mt-6 pt-6 border-t border-gray-700 space-y-6">
-                      {/* What-if simulator */}
-                      {selectedGoal === goal.goal_id && (
+                      {/* What-if simulator lives INSIDE GoalCompass, per goal */}
+                      {simGoalId === goal.goal_id && (
                         <div className="mb-6 p-4 rounded-lg bg-gray-900/60 border border-gray-700">
                           <h4 className="text-sm font-semibold text-yellow-400 mb-3 flex items-center gap-2">
                             <span>🧮</span> What-if simulator
@@ -863,8 +879,8 @@ export default function GoalCompass() {
                                 type="number"
                                 min={0}
                                 value={simInput}
-                                onChange={(e) => setSimInput(e.target.value)}
                                 onClick={(e) => e.stopPropagation()}
+                                onChange={(e) => setSimInput(e.target.value)}
                                 className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-sm"
                                 placeholder={
                                   goal.suggested_monthly_need
@@ -877,7 +893,8 @@ export default function GoalCompass() {
                               disabled={simLoading || !simInput}
                               onClick={(e) => {
                                 e.stopPropagation()
-                                runSimulation(goal.goal_id, Number(simInput || 0))
+                                const amt = Number(simInput || 0)
+                                triggerSimulation(goal.goal_id, amt)
                               }}
                               className="px-4 py-2 bg-yellow-500 text-black rounded-lg text-sm font-semibold disabled:opacity-50"
                             >
