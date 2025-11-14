@@ -1063,7 +1063,6 @@ async def upload_xlsx_etl(
     # Try to dispatch to Celery worker
     try:
         from app.workers.etl_worker import process_excel_etl
-        from celery import current_app
         
         # Read file content for worker
         with open(path, "rb") as f:
@@ -1092,30 +1091,41 @@ async def upload_xlsx_etl(
             records_staged=0
         )
     except Exception as e:
-        logger.warning(f"Worker dispatch failed, falling back to sync processing: {e}")
-        # Fallback to sync processing
-        pass
-    
-    # Sync fallback
-    try:
-        records_staged, valid, invalid = _sync_parse_and_stage_excel(
-            str(user.user_id),
-            str(batch_id),
-            file.filename or "upload.xlsx",
-            path,
-            bank_code
-        )
+        logger.warning(f"Worker dispatch failed: {e}. Processing in background thread to avoid timeout.")
+        # Fallback: process in background thread to avoid timeout
+        import threading
         
-        # Cleanup temp file
-        try:
-            os.remove(path)
-        except Exception:
-            pass
+        def process_in_background():
+            try:
+                _sync_parse_and_stage_excel(
+                    str(user.user_id),
+                    str(batch_id),
+                    file.filename or "upload.xlsx",
+                    path,
+                    bank_code
+                )
+                # Cleanup temp file after processing
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+            except Exception as bg_error:
+                logger.error(f"Background Excel processing failed: {bg_error}")
+                # Cleanup on error
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
         
+        # Start background thread
+        thread = threading.Thread(target=process_in_background, daemon=True)
+        thread.start()
+        
+        # Return immediately to avoid timeout
         return ETLResponse(
-            message=f"Upload processed: {valid} valid, {invalid} invalid",
+            message="File received. Processing in background (sync mode).",
             batch_id=str(batch_id),
-            records_staged=records_staged,
+            records_staged=0
         )
     except HTTPException:
         # If lower layer raised an HTTPException, just bubble it up
@@ -1200,38 +1210,54 @@ async def upload_pdf_etl(
             records_staged=0
         )
     except Exception as e:
-        logger.warning(f"Worker dispatch failed, falling back to sync processing: {e}")
-        # Fallback to sync processing
-        pass
-    
-    # Sync fallback - save to temp file
-    import tempfile
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(raw_bytes)
-            temp_path = tmp.name
+        logger.warning(f"Worker dispatch failed: {e}. Processing in background thread to avoid timeout.")
+        # Fallback: process in background thread to avoid timeout
+        import threading
+        import tempfile
         
-        records_staged, valid, invalid = _sync_parse_and_stage_pdf(
-            str(user.user_id),
-            str(batch_id),
-            file.filename or "upload.pdf",
-            temp_path,
-            bank_code,
-            password
-        )
-        
-        # Cleanup temp file
+        temp_path = None
         try:
-            if temp_path:
-                os.remove(temp_path)
-        except Exception:
-            pass
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(raw_bytes)
+                temp_path = tmp.name
+        except Exception as tmp_error:
+            logger.error(f"Failed to create temp file: {tmp_error}")
+            raise HTTPException(status_code=500, detail="Failed to process PDF file")
         
+        def process_in_background():
+            try:
+                _sync_parse_and_stage_pdf(
+                    str(user.user_id),
+                    str(batch_id),
+                    file.filename or "upload.pdf",
+                    temp_path,
+                    bank_code,
+                    password
+                )
+                # Cleanup temp file after processing
+                try:
+                    if temp_path:
+                        os.remove(temp_path)
+                except Exception:
+                    pass
+            except Exception as bg_error:
+                logger.error(f"Background PDF processing failed: {bg_error}")
+                # Cleanup on error
+                try:
+                    if temp_path:
+                        os.remove(temp_path)
+                except Exception:
+                    pass
+        
+        # Start background thread
+        thread = threading.Thread(target=process_in_background, daemon=True)
+        thread.start()
+        
+        # Return immediately to avoid timeout
         return ETLResponse(
-            message=f"Upload processed: {valid} valid, {invalid} invalid",
+            message="File received. Processing in background (sync mode).",
             batch_id=str(batch_id),
-            records_staged=records_staged,
+            records_staged=0
         )
     except HTTPException:
         if temp_path:
