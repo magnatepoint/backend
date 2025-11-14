@@ -569,6 +569,7 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
                 raise ValueError(f"Failed to read Excel file. Ensure it's a valid .xlsx or .xls file: {str(e)}")
         
         # Try bank-specific normalization, else generic row parser
+        rows = []
         try:
             # First try auto-header detection
             df = read_excel_with_auto_header(path, bank_code)
@@ -578,6 +579,15 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
             # Try normalize_excel_df
             rows = normalize_excel_df(df, bank_code)
             logger.info(f"Excel normalize produced {len(rows)} canonical rows for bank_code={bank_code}")
+            
+            # If normalize_excel_df succeeded but returned 0 rows, fall back to generic parser
+            if len(rows) == 0:
+                logger.warning(
+                    f"normalize_excel_df succeeded but returned 0 rows for bank_code={bank_code}. "
+                    f"Falling back to generic Excel row parser."
+                )
+                raise ValueError("normalize_excel_df returned 0 rows")
+                
         except ValueError as e:
             logger.warning(
                 f"normalize_excel_df failed for bank_code={bank_code}: {e}. "
