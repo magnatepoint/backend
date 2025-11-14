@@ -37,12 +37,13 @@ async def get_goal_coach(
             now = datetime.utcnow()
             month = f"{now.year}-{now.month:02d}-01"
         
-        # Get goal progress for the month
+        # Get goal progress for the month (join with goals table to get goal_name)
         goals = session.execute(text("""
             SELECT 
-                gs.goal_id, gs.goal_name, gs.remaining_amount, gs.months_remaining,
+                gs.goal_id, g.goal_name, gs.remaining_amount, gs.months_remaining,
                 gs.suggested_monthly_need, gs.on_track_flag, gs.risk_level
             FROM goalcompass.goal_compass_snapshot gs
+            JOIN goal.user_goals_master g ON g.goal_id = gs.goal_id
             WHERE gs.user_id = :user_id AND gs.month = :month
             ORDER BY gs.risk_level DESC, gs.remaining_amount DESC
         """), {
@@ -63,7 +64,7 @@ async def get_goal_coach(
             SELECT 
                 ga.goal_id, ga.planned_amount, gs.suggested_monthly_need
             FROM budgetpilot.user_budget_commit_goal_alloc ga
-            JOIN goalcompass.goal_compass_snapshot gs 
+            LEFT JOIN goalcompass.goal_compass_snapshot gs 
                 ON gs.user_id = ga.user_id 
                 AND gs.goal_id = ga.goal_id 
                 AND gs.month = ga.month
