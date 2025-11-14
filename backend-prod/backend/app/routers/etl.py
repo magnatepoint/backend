@@ -921,7 +921,7 @@ def _sync_parse_and_stage_pdf(
     user_id: str,
     batch_id: str,
     file_name: str,
-    raw_bytes: bytes,
+    file_or_bytes: Any,
     bank_code: str = "GENERIC",
     password: Optional[str] = None
 ) -> Tuple[int, int, int]:
@@ -1257,7 +1257,6 @@ async def upload_pdf_etl(
         # Real 500
         logger.exception(f"Error processing PDF upload: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process PDF file: {str(e)}")
-    except HTTPException:
         if temp_path:
             try:
                 os.remove(temp_path)
