@@ -1,5 +1,4 @@
-import React from 'react'
-import { LineChart, Line, Area, AreaChart, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { Area, AreaChart, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Line } from 'recharts'
 import { motion } from 'framer-motion'
 import { formatCurrency } from '../../lib/utils'
 
