@@ -138,17 +138,53 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
     session = SessionLocal()
     
     try:
-        # pandas.read_excel handles both .xlsx (openpyxl) and .xls (xlrd) automatically
+        # First, read without headers to find the actual header row
         # Try openpyxl first for .xlsx, fallback to xlrd for .xls
         try:
-            df = pd.read_excel(path, engine="openpyxl")
+            df_raw = pd.read_excel(path, engine="openpyxl", header=None, nrows=20)
         except Exception:
             # Fallback to xlrd for .xls files
             try:
-                df = pd.read_excel(path, engine="xlrd")
+                df_raw = pd.read_excel(path, engine="xlrd", header=None, nrows=20)
             except Exception as e:
                 logger.error(f"Failed to read Excel file: {e}")
                 raise HTTPException(status_code=400, detail=f"Failed to read Excel file. Ensure it's a valid .xlsx or .xls file: {str(e)}")
+        
+        # Find the header row by looking for common column names
+        header_row_idx = None
+        date_keywords = ["date", "transaction date", "value date", "txn_date"]
+        desc_keywords = ["narration", "description", "remarks", "transaction remarks", "particulars"]
+        
+        for idx in range(min(15, len(df_raw))):
+            row_values = [str(val).strip().lower() for val in df_raw.iloc[idx].values if pd.notna(val)]
+            has_date = any(keyword in " ".join(row_values) for keyword in date_keywords)
+            has_desc = any(keyword in " ".join(row_values) for keyword in desc_keywords)
+            
+            if has_date and has_desc:
+                header_row_idx = idx
+                logger.info(f"Found header row at index {idx} for bank {bank_code}")
+                break
+        
+        # Re-read the file with the correct header row
+        if header_row_idx is not None:
+            try:
+                df = pd.read_excel(path, engine="openpyxl", header=header_row_idx)
+            except Exception:
+                try:
+                    df = pd.read_excel(path, engine="xlrd", header=header_row_idx)
+                except Exception as e:
+                    logger.error(f"Failed to read Excel file with header row {header_row_idx}: {e}")
+                    raise HTTPException(status_code=400, detail=f"Failed to read Excel file: {str(e)}")
+        else:
+            # Fallback: try reading with default header (row 0)
+            try:
+                df = pd.read_excel(path, engine="openpyxl")
+            except Exception:
+                try:
+                    df = pd.read_excel(path, engine="xlrd")
+                except Exception as e:
+                    logger.error(f"Failed to read Excel file: {e}")
+                    raise HTTPException(status_code=400, detail=f"Failed to read Excel file: {str(e)}")
         
         # Normalize Excel columns → canonical fields
         try:
@@ -404,8 +440,14 @@ def parse_pdf_statement(
         with pdfplumber.open(BytesIO(raw_bytes), password=password) as pdf:
             all_text_pages = [page.extract_text() or "" for page in pdf.pages]
     except Exception as e:
-        if "password" in str(e).lower() or "encrypted" in str(e).lower():
-            raise ValueError("PDF is password protected. Please provide the password.")
+        # Check for password-related errors
+        error_str = str(e).lower()
+        error_type = type(e).__name__
+        if "password" in error_str or "encrypted" in error_str or "PDFPasswordIncorrect" in error_type:
+            if password:
+                raise ValueError("PDF password is incorrect. Please check the password and try again.")
+            else:
+                raise ValueError("PDF is password protected. Please provide the password.")
         raise ValueError(f"Failed to open PDF: {str(e)}")
     
     bank = bank_code.upper()
