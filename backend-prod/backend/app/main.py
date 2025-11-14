@@ -21,6 +21,39 @@ async def lifespan(app: FastAPI):
     # Startup
     print("🚀 Starting Monytix API...")
     
+    # Check and start Redis (optional - only if not running)
+    try:
+        import redis
+        from config import settings
+        redis_url = settings.redis_url.replace("redis://", "").split("/")[0]
+        if ":" in redis_url:
+            host, port = redis_url.split(":")
+            port = int(port)
+        else:
+            host = redis_url
+            port = 6379
+        
+        r = redis.Redis(host=host, port=port, socket_connect_timeout=2)
+        r.ping()
+        print("✅ Redis is running")
+    except Exception as e:
+        print(f"⚠️  Redis not available: {e}")
+        print("   Celery workers will not be available. Using sync processing fallback.")
+    
+    # Check Celery worker availability (optional)
+    try:
+        from celery import current_app
+        # Try to inspect active workers
+        inspect = current_app.control.inspect()
+        active_workers = inspect.active()
+        if active_workers:
+            print(f"✅ Celery workers available: {len(active_workers)} worker(s)")
+        else:
+            print("⚠️  No active Celery workers found. Background processing will use sync fallback.")
+    except Exception as e:
+        print(f"⚠️  Celery not available: {e}")
+        print("   Background processing will use sync fallback.")
+    
     # Initialize database tables
     try:
         from app.database.postgresql import init_db
