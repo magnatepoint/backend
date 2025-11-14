@@ -1522,8 +1522,8 @@ async def get_income_expense_overlay(
         # Get monthly income and expenses
         result = session.query(
             func.date_trunc('month', TxnFact.txn_date).label('month'),
-            func.sum(func.case((TxnFact.direction == 'credit', TxnFact.amount), else_=0)).label('income'),
-            func.sum(func.case((TxnFact.direction == 'debit', TxnFact.amount), else_=0)).label('expenses')
+            func.sum(case((TxnFact.direction == 'credit', TxnFact.amount), else_=0)).label('income'),
+            func.sum(case((TxnFact.direction == 'debit', TxnFact.amount), else_=0)).label('expenses')
         ).outerjoin(
             TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id
         ).filter(
@@ -1664,7 +1664,7 @@ async def get_goal_impact(
         
         # Get active goals
         goals = session.execute(text("""
-            SELECT goal_id, goal_name, target_amount, current_amount, target_date
+            SELECT goal_id, goal_name, estimated_cost, current_savings, target_date
             FROM goal.user_goals_master
             WHERE user_id = :uid AND status = 'active'
         """), {"uid": str(user_uuid)}).fetchall()
@@ -1693,19 +1693,19 @@ async def get_goal_impact(
         spend_map = {cat: float(amt) for cat, amt in category_spend}
         
         goal_impacts = []
-        for goal_id, goal_name, target, current, target_date in goals:
+        for goal_id, goal_name, estimated_cost, current_savings, target_date in goals:
             # Simple heuristic: if goal is savings-related, show impact of wants spending
             # For other goals, show relevant category spending
             total_wants = sum(amt for cat, amt in spend_map.items() 
                             if cat in ['food_dining', 'entertainment', 'shopping'])
             
-            progress_pct = (float(current or 0) / float(target or 1)) * 100 if target else 0
+            progress_pct = (float(current_savings or 0) / float(estimated_cost or 1)) * 100 if estimated_cost else 0
             
             goal_impacts.append({
                 "goal_id": str(goal_id),
                 "goal_name": goal_name,
-                "target_amount": float(target or 0),
-                "current_amount": float(current or 0),
+                "target_amount": float(estimated_cost or 0),
+                "current_amount": float(current_savings or 0),
                 "progress_percentage": round(progress_pct, 1),
                 "target_date": target_date.isoformat() if target_date else None,
                 "impact_message": f"You're {progress_pct:.0f}% on track to fund your goal '{goal_name}' by {target_date.strftime('%B %Y') if target_date else 'target date'}."
@@ -1984,7 +1984,7 @@ async def get_merchant_metrics(
         merchant_category_rows = session.query(
             TxnFact.merchant_name_norm.label("merchant"),
             func.coalesce(TxnEnriched.category_code, 'uncategorized').label("category_code"),
-            func.sum(func.case((TxnFact.direction == 'debit', TxnFact.amount), else_=0)).label("spend")
+            func.sum(case((TxnFact.direction == 'debit', TxnFact.amount), else_=0)).label("spend")
         ).outerjoin(
             TxnEnriched, TxnFact.txn_id == TxnEnriched.txn_id
         ).filter(
@@ -2000,7 +2000,7 @@ async def get_merchant_metrics(
 
         prev_rows = session.query(
             TxnFact.merchant_name_norm.label("merchant"),
-            func.sum(func.case((TxnFact.direction == 'debit', TxnFact.amount), else_=0)).label("total_spend")
+            func.sum(case((TxnFact.direction == 'debit', TxnFact.amount), else_=0)).label("total_spend")
         ).filter(
             TxnFact.user_id == user_uuid,
             TxnFact.direction == 'debit',
