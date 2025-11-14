@@ -930,6 +930,14 @@ def _sync_parse_and_stage_pdf(
     session = SessionLocal()
     
     try:
+        # Accept both raw bytes and a file path
+        if isinstance(file_or_bytes, (bytes, bytearray)):
+            raw_bytes = file_or_bytes
+        else:
+            # assume it's a path-like
+            with open(file_or_bytes, "rb") as f:
+                raw_bytes = f.read()
+        
         # Parse PDF into canonical rows
         try:
             rows = parse_pdf_statement(raw_bytes, bank_code, password)
