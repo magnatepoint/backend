@@ -158,6 +158,7 @@ from app.routers import spendsense as spendsense_router
 from app.routers import goals as goals_router
 from app.routers import budgetpilot as budgetpilot_router
 from app.routers import goalcompass as goalcompass_router
+from app.routers import goalcoach as goalcoach_router
 from app.routers import moneymoments as moneymoments_router
 from app.routers import categories as categories_router
 
@@ -223,6 +224,7 @@ app.include_router(spendsense_router.router, prefix="/api/spendsense", tags=["Sp
 app.include_router(goals_router.router, prefix="/api/goals", tags=["Goals"])
 app.include_router(budgetpilot_router.router, prefix="/api/budgetpilot", tags=["BudgetPilot"])
 app.include_router(goalcompass_router.router, prefix="/api/goalcompass", tags=["GoalCompass"])
+app.include_router(goalcoach_router.router, prefix="/api/goalcoach", tags=["GoalCoach"])
 app.include_router(moneymoments_router.router, prefix="/api/moneymoments", tags=["MoneyMoments"])
 app.include_router(categories_router.router, prefix="/api", tags=["Categories"])
 
