@@ -21,7 +21,7 @@ async def lifespan(app: FastAPI):
     # Startup
     print("🚀 Starting Monytix API...")
     
-    # Check and start Redis (optional - only if not running)
+    # Check Redis availability
     try:
         import redis
         from config import settings
@@ -35,10 +35,17 @@ async def lifespan(app: FastAPI):
         
         r = redis.Redis(host=host, port=port, socket_connect_timeout=2)
         r.ping()
-        print("✅ Redis is running")
+        print(f"✅ Redis is running at {host}:{port}")
     except Exception as e:
-        print(f"⚠️  Redis not available: {e}")
-        print("   Celery workers will not be available. Using sync processing fallback.")
+        print(f"⚠️  Redis not available at {host}:{port}: {e}")
+        print("   To enable Celery workers:")
+        if host == "localhost" or host == "127.0.0.1":
+            print("   - Run: redis-server --daemonize yes")
+            print("   - Or use: ./start_redis.sh")
+        else:
+            print(f"   - Start Redis on {host}:6379")
+            print("   - Or update REDIS_URL/CELERY_BROKER_URL in .env to use localhost")
+        print("   Background processing will use sync fallback until Redis is available.")
     
     # Check Celery worker availability (optional)
     try:
