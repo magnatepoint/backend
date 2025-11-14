@@ -351,21 +351,29 @@ def normalize_excel_df(df, bank_code: str) -> List[Dict[str, Any]]:
     bank_key = bank_code.upper() if bank_code.upper() in mapping else "GENERIC"
     bank_map = mapping[bank_key]
     
-    # Check required cols - be more flexible with matching
+    # Check required cols for a sanity check (using fuzzy matching)
     date_cols = [k for k, v in bank_map.items() if v == "txn_date"]
     desc_cols = [k for k, v in bank_map.items() if v == "description"]
     
     # Normalize column names for comparison (lowercase, strip whitespace)
     df_cols_normalized = {str(c).strip().lower(): c for c in df.columns}
+    df_cols_list = list(df_cols_normalized.keys())
     
-    has_date = any(col.lower().strip() in df_cols_normalized for col in date_cols)
-    has_desc = any(col.lower().strip() in df_cols_normalized for col in desc_cols)
+    # Fuzzy check: look for date and description keywords in any column
+    has_date = any(
+        any("date" in col and ("value" in col or col == "date") for col in df_cols_list)
+        or any(col in df_cols_list for col in date_cols)
+    )
+    has_desc = any(
+        any(x in col for x in ["narration", "description", "particulars", "remarks"] for col in df_cols_list)
+        or any(col in df_cols_list for col in desc_cols)
+    )
     
     if not has_date or not has_desc:
         logger.error(
             f"Column mapping failed for {bank_key}. "
             f"Looking for date in {date_cols}, desc in {desc_cols}. "
-            f"Available columns (normalized): {list(df_cols_normalized.keys())}"
+            f"Available columns (normalized): {df_cols_list}"
         )
         raise ValueError(
             f"No column mapping found for bank_code={bank_code}. Available columns: {list(df.columns)}"
