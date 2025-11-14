@@ -197,6 +197,7 @@ export default function SpendSense() {
   const [subcategories, setSubcategories] = useState<Array<{ subcategory_code: string; subcategory_name: string }>>([])
   const [showImportModal, setShowImportModal] = useState(false)
   const [importFile, setImportFile] = useState<File | null>(null)
+  const [importBankCode, setImportBankCode] = useState<string>('GENERIC')
   const [importErrors, setImportErrors] = useState<Array<{ row: number; field: string | null; message: string }>>([])
   const [importing, setImporting] = useState(false)
   
@@ -653,16 +654,32 @@ export default function SpendSense() {
     setImportErrors([])
 
     try {
-      const result = await apiClient.bulkImportTransactions(importFile)
-      
-      if (result.success) {
-        showToast(`Successfully imported ${result.imported} transaction(s)`, 'success')
+      const fileExt = importFile.name.toLowerCase()
+      let result
+
+      if (fileExt.endsWith('.xlsx')) {
+        // Use ETL endpoint for Excel with bank-specific parsing
+        result = await apiClient.uploadExcelETL(importFile, importBankCode)
+        showToast(`Imported ${result.records_staged || 0} records. Categorized automatically; you can edit categories in Recent Transactions.`, 'success')
         setShowImportModal(false)
         setImportFile(null)
+        setImportBankCode('GENERIC')
         loadData() // Reload transactions
+      } else if (fileExt.endsWith('.csv')) {
+        // Use existing bulk import for CSV (or switch to ETL if preferred)
+        result = await apiClient.bulkImportTransactions(importFile)
+        
+        if (result.success) {
+          showToast(`Successfully imported ${result.imported} transaction(s)`, 'success')
+          setShowImportModal(false)
+          setImportFile(null)
+          loadData() // Reload transactions
+        } else {
+          setImportErrors(result.errors)
+          showToast(`Import failed: ${result.errors.length} error(s) found`, 'error')
+        }
       } else {
-        setImportErrors(result.errors)
-        showToast(`Import failed: ${result.errors.length} error(s) found`, 'error')
+        showToast('Unsupported file type. Please use .xlsx or .csv', 'error')
       }
     } catch (err: any) {
       console.error('Failed to import transactions:', err)
@@ -1702,6 +1719,25 @@ export default function SpendSense() {
                   )}
                 </div>
 
+                {importFile && importFile.name.toLowerCase().endsWith('.xlsx') && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">Bank (for Excel column mapping)</label>
+                    <select
+                      value={importBankCode}
+                      onChange={(e) => setImportBankCode(e.target.value)}
+                      className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-yellow-500"
+                    >
+                      <option value="GENERIC">Generic / Auto-detect</option>
+                      <option value="HDFC">HDFC Bank</option>
+                      <option value="ICICI">ICICI Bank</option>
+                      <option value="SBI">State Bank of India</option>
+                    </select>
+                    <p className="mt-1 text-xs text-gray-400">
+                      Select your bank for automatic column mapping. Transactions will be auto-categorized.
+                    </p>
+                  </div>
+                )}
+
                 {importErrors.length > 0 && (
                   <div className="bg-red-900/20 border border-red-500 rounded-lg p-4">
                     <h3 className="text-red-400 font-semibold mb-2">Import Errors ({importErrors.length})</h3>
@@ -1719,8 +1755,9 @@ export default function SpendSense() {
 
                 <div className="bg-blue-900/20 border border-blue-500 rounded-lg p-4">
                   <p className="text-sm text-blue-300">
-                    <strong>Note:</strong> Download the template first to ensure correct format. 
-                    All rows must be valid for import to succeed.
+                    <strong>Excel files:</strong> Select your bank for automatic column mapping. Transactions will be auto-categorized using rule-based categorization.
+                    <br />
+                    <strong>CSV files:</strong> Download the template first to ensure correct format. All rows must be valid for import to succeed.
                   </p>
                 </div>
               </div>

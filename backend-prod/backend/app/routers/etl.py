@@ -2,17 +2,21 @@
 ETL Pipeline API Endpoints
 Exposes Extract, Transform, Load operations
 """
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request, Query
 from typing import List, Dict, Any, Optional, Tuple
 import uuid
 import os
 import logging
+import re
+from datetime import datetime, date
 from app.routers.auth import get_current_user, UserDep
 from app.services.etl_pipeline import ETLPipeline
 from app.routers._upload_utils import save_upload_to_temp, ensure_csv_mime, ensure_excel_mime
 from app.routers._async_tools import run_sync
 from app.schemas.etl import StagedTxnIn
 from pydantic import BaseModel
+from app.database.postgresql import SessionLocal
+from sqlalchemy import text
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -126,29 +130,251 @@ def _sync_parse_and_stage_csv(user_id: str, batch_id: str, file_name: str, path:
         raise
 
 
-def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, path: str) -> Tuple[int, int, int]:
-    """Synchronous Excel parsing and staging (runs in thread pool)"""
+def normalize_excel_df(df, bank_code: str) -> List[Dict[str, Any]]:
+    """
+    Bank-specific mappings: turn Excel columns into canonical fields.
+    Returns list of dicts with: txn_date, amount, direction, description, ref_no
+    """
+    import pandas as pd
+    
+    # Clean columns
+    df = df.rename(columns={c: str(c).strip().lower() for c in df.columns})
+    
+    mapping: Dict[str, Dict[str, str]] = {}
+    
+    # EXAMPLE per-bank mappings – adjust based on actual files
+    mapping["HDFC"] = {
+        "date": "txn_date",
+        "value date": "txn_date",
+        "value_date": "txn_date",
+        "withdrawal amt.": "debit",
+        "withdrawal_amt": "debit",
+        "deposit amt.": "credit",
+        "deposit_amt": "credit",
+        "narration": "description",
+        "chq/ref number": "ref_no",
+        "chq_ref_number": "ref_no",
+        "ref": "ref_no",
+    }
+    
+    mapping["ICICI"] = {
+        "transaction date": "txn_date",
+        "transaction_date": "txn_date",
+        "date": "txn_date",
+        "withdrawal amount (inr)": "debit",
+        "withdrawal_amount": "debit",
+        "deposit amount (inr)": "credit",
+        "deposit_amount": "credit",
+        "transaction remarks": "description",
+        "transaction_remarks": "description",
+        "remarks": "description",
+        "cheque number": "ref_no",
+        "cheque_number": "ref_no",
+    }
+    
+    mapping["SBI"] = {
+        "date": "txn_date",
+        "value date": "txn_date",
+        "withdrawal": "debit",
+        "deposit": "credit",
+        "description": "description",
+        "narration": "description",
+        "ref no": "ref_no",
+        "ref_no": "ref_no",
+    }
+    
+    # fallback generic
+    mapping["GENERIC"] = {
+        "date": "txn_date",
+        "transaction_date": "txn_date",
+        "amount": "amount",
+        "type": "direction",
+        "transaction_type": "direction",
+        "description": "description",
+        "narration": "description",
+        "ref": "ref_no",
+        "reference": "ref_no",
+        "reference_id": "ref_no",
+    }
+    
+    bank_key = bank_code.upper() if bank_code.upper() in mapping else "GENERIC"
+    bank_map = mapping[bank_key]
+    
+    # Check required cols
+    date_cols = [k for k, v in bank_map.items() if v == "txn_date"]
+    desc_cols = [k for k, v in bank_map.items() if v == "description"]
+    
+    has_date = any(col in df.columns for col in date_cols)
+    has_desc = any(col in df.columns for col in desc_cols)
+    
+    if not has_date or not has_desc:
+        raise ValueError(f"No column mapping found for bank_code={bank_code}. Available columns: {list(df.columns)}")
+    
+    rows: List[Dict[str, Any]] = []
+    
+    for _, row in df.iterrows():
+        rec: Dict[str, Any] = {
+            "txn_date": None,
+            "amount": None,
+            "direction": None,
+            "description": "",
+            "ref_no": None,
+        }
+        
+        # Map columns
+        for col, val in row.items():
+            key = bank_map.get(col)
+            if not key:
+                continue
+            
+            if key == "txn_date":
+                if pd.isna(val):
+                    continue
+                if isinstance(val, (datetime, pd.Timestamp)):
+                    rec["txn_date"] = val.date()
+                else:
+                    try:
+                        rec["txn_date"] = pd.to_datetime(val).date()
+                    except:
+                        continue
+            elif key in ("debit", "credit"):
+                if pd.isna(val) or float(val) == 0:
+                    continue
+                amt = float(val)
+                rec["amount"] = amt
+                rec["direction"] = "debit" if key == "debit" else "credit"
+            elif key == "amount":
+                if pd.isna(val) or float(val) == 0:
+                    continue
+                rec["amount"] = abs(float(val))
+            else:
+                rec[key] = None if pd.isna(val) else str(val).strip()
+        
+        # Derive direction for generic (single amount + type column)
+        if bank_key == "GENERIC" and rec["direction"] is None:
+            type_val = str(row.get("type", "")).lower() if "type" in row else ""
+            if type_val.startswith("d") or type_val.startswith("debit"):
+                rec["direction"] = "debit"
+            elif type_val.startswith("c") or type_val.startswith("credit"):
+                rec["direction"] = "credit"
+            elif rec["amount"]:
+                # Try to infer from amount sign (if negative, likely debit)
+                # But we already have abs, so check original
+                orig_amt = row.get("amount")
+                if orig_amt and float(orig_amt) < 0:
+                    rec["direction"] = "debit"
+                    rec["amount"] = abs(float(orig_amt))
+                else:
+                    rec["direction"] = "credit"
+        
+        if not rec["txn_date"] or rec["amount"] is None or not rec["direction"]:
+            # skip blank / header rows
+            continue
+        
+        rows.append(rec)
+    
+    return rows
+
+
+def apply_categorization_rules(
+    session,
+    rows: List[Dict[str, Any]],
+    bank_code: str
+) -> List[Dict[str, Any]]:
+    """Apply categorization rules from enrichment.txn_categorization_rule table"""
+    if not rows:
+        return []
+    
+    # Load rules once
+    rule_rows = session.execute(text("""
+        SELECT rule_id, bank_code, match_field, match_type, match_value,
+               direction, primary_category, sub_category, priority
+        FROM enrichment.txn_categorization_rule
+        WHERE is_active = TRUE
+          AND (bank_code = :bank_code OR bank_code IS NULL)
+        ORDER BY priority ASC
+    """), {"bank_code": bank_code}).mappings().all()
+    
+    rules = [dict(r) for r in rule_rows]
+    
+    categorized: List[Dict[str, Any]] = []
+    
+    for r in rows:
+        primary = "uncategorized"
+        sub = "uncategorized"
+        
+        for rule in rules:
+            # direction filter
+            if rule["direction"] and rule["direction"] != r["direction"]:
+                continue
+            
+            field_name = rule["match_field"]
+            haystack = (r.get(field_name) or "").lower()
+            
+            if not haystack:
+                continue
+            
+            pat = (rule["match_value"] or "").lower()
+            
+            matched = False
+            if rule["match_type"] == "contains":
+                matched = pat in haystack
+            elif rule["match_type"] == "startswith":
+                matched = haystack.startswith(pat)
+            elif rule["match_type"] == "regex":
+                try:
+                    if re.search(rule["match_value"], haystack, re.IGNORECASE):
+                        matched = True
+                except re.error:
+                    matched = False
+            
+            if matched:
+                primary = rule["primary_category"]
+                sub = rule["sub_category"]
+                break  # respect priority
+        
+        r["primary_category"] = primary
+        r["sub_category"] = sub
+        categorized.append(r)
+    
+    return categorized
+
+
+def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, path: str, bank_code: str = "GENERIC") -> Tuple[int, int, int]:
+    """Synchronous Excel parsing and staging with bank-specific normalization and categorization"""
     import pandas as pd
     pipeline = ETLPipeline(user_id)
+    session = SessionLocal()
     
     try:
         # Use openpyxl engine explicitly for .xlsx files
         df = pd.read_excel(path, engine="openpyxl")
-        txns = []
         
-        for idx, row in df.iterrows():
+        # Normalize Excel columns → canonical fields
+        try:
+            rows = normalize_excel_df(df, bank_code)
+        except ValueError as e:
+            logger.error(f"Failed to normalize Excel: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+        
+        # Categorize each row using rules table
+        categorized_rows = apply_categorization_rules(session, rows, bank_code)
+        
+        # Convert to StagedTxnIn format
+        txns = []
+        for idx, r in enumerate(categorized_rows):
             try:
                 tx = StagedTxnIn(
-                    amount=row.get("amount"),
-                    transaction_date=row.get("date") or row.get("transaction_date"),
-                    description=row.get("description") or row.get("narration"),
-                    merchant=row.get("merchant"),
-                    bank=row.get("bank"),
-                    category=row.get("category"),
-                    reference_id=row.get("reference") or row.get("reference_id"),
-                    currency=row.get("currency", "INR"),
-                    transaction_type=row.get("type") or row.get("transaction_type"),
-                    source="xlsx",
+                    amount=r["amount"],
+                    transaction_date=r["txn_date"],
+                    description=r["description"],
+                    merchant=None,
+                    bank=bank_code,
+                    category=r["primary_category"],
+                    reference_id=r.get("ref_no"),
+                    currency="INR",
+                    transaction_type=r["direction"],
+                    source="excel_upload",
                     row_number=idx + 1,
                 )
                 txns.append(tx.dict())
@@ -167,6 +393,8 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
     except Exception as e:
         logger.exception(f"Error parsing Excel for batch {batch_id}")
         raise
+    finally:
+        session.close()
 
 
 @router.post("/upload/csv", response_model=ETLResponse)
@@ -218,9 +446,17 @@ async def upload_csv_etl(
 @router.post("/upload/xlsx", response_model=ETLResponse)
 async def upload_xlsx_etl(
     file: UploadFile = File(...),
+    bank_code: str = Query("GENERIC", description="Bank code: HDFC, ICICI, SBI, or GENERIC"),
     user: UserDep = Depends(get_current_user)
 ):
-    """Upload XLSX file - Starts ETL pipeline (non-blocking)"""
+    """
+    Upload XLSX file - Starts ETL pipeline with bank-specific column mapping and rule-based categorization
+    
+    Process:
+    1. Extract: Parse Excel with bank-specific column normalization
+    2. Transform: Apply categorization rules from enrichment.txn_categorization_rule
+    3. Load: Stage, validate, and load to production tables
+    """
     # Stream to temp, sniff mime
     path, size, mime = await save_upload_to_temp(file)
     kind = ensure_excel_mime(mime)  # "xlsx"|"xls"
@@ -241,7 +477,7 @@ async def upload_xlsx_etl(
         file_size=size
     )
     
-    logger.info(f"XLSX upload batch created: {batch_id} for user {user.user_id}, size: {size}")
+    logger.info(f"XLSX upload batch created: {batch_id} for user {user.user_id}, bank_code: {bank_code}, size: {size}")
     
     # Try to get worker task
     try:
@@ -249,17 +485,36 @@ async def upload_xlsx_etl(
     except Exception:
         parse_xls = None  # No worker available
     
-    # Dispatch or fallback
-    res = await run_sync(
-        _dispatch_or_fallback,
-        parse_xls,
-        user_id=str(user.user_id),
-        batch_id=str(batch_id),
-        file_name=file.filename or "upload.xlsx",
-        path=path
-    )
-    
-    return res
+    # For now, use sync fallback with bank_code
+    # TODO: Update worker to accept bank_code parameter
+    try:
+        records_staged, valid, invalid = _sync_parse_and_stage_excel(
+            str(user.user_id),
+            str(batch_id),
+            file.filename or "upload.xlsx",
+            path,
+            bank_code
+        )
+        
+        # Cleanup temp file
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        
+        return ETLResponse(
+            message=f"Upload processed: {valid} valid, {invalid} invalid",
+            batch_id=str(batch_id),
+            records_staged=records_staged,
+        )
+    except Exception as e:
+        # Cleanup temp file on error
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        logger.exception(f"Error processing Excel upload: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process Excel file: {str(e)}")
 
 
 @router.get("/batches/{batch_id}", response_model=BatchStatusResponse)
