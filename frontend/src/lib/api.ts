@@ -696,6 +696,36 @@ class ApiClient {
     return response.json()
   }
 
+  async uploadExcelETL(file: File, bankCode: string = 'GENERIC') {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const { supabase } = await import('./supabase')
+    const { data: { session } } = await supabase.auth.getSession()
+    const token = session?.access_token || localStorage.getItem('supabase_token')
+    const response = await fetch(`${this.baseUrl}/api/etl/upload/xlsx?bank_code=${encodeURIComponent(bankCode)}`, {
+      method: 'POST',
+      headers: {
+        ...(token && { 'Authorization': `Bearer ${token}` }),
+      },
+      body: formData
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      let message = 'Upload failed'
+      try {
+        const error = JSON.parse(errorText)
+        message = error.message || error.detail || message
+      } catch {
+        message = errorText || message
+      }
+      throw new Error(message)
+    }
+
+    return await response.json()
+  }
+
   async uploadPDFETL(file: File, bankCode: string = 'GENERIC', password?: string) {
     const formData = new FormData()
     formData.append('file', file)
