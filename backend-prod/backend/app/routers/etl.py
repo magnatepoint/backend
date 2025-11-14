@@ -612,11 +612,11 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
                     logger.error(f"Failed to read Excel file for generic parser: {read_err}")
                     raise ValueError(f"Failed to read Excel file: {read_err}")
             
-            logger.info(f"Generic parser: DataFrame shape: {df.shape}")
-            logger.info(f"Generic parser: First 10 rows (raw):\n{df.head(10).to_string()}")
+            logger.warning(f"Generic parser: DataFrame shape: {df.shape}")
+            logger.warning(f"Generic parser: First 10 rows (raw):\n{df.head(10).to_string()}")
             
             rows = parse_excel_generic_rows(df)
-            logger.info(f"Generic Excel parser produced {len(rows)} canonical rows")
+            logger.warning(f"Generic Excel parser produced {len(rows)} canonical rows")
         
         if rows:
             logger.info(f"Sample row[0]: {rows[0]}")
@@ -717,7 +717,7 @@ def parse_excel_generic_rows(df) -> List[Dict[str, Any]]:
         
         # Log first few lines for debugging
         if lines_processed <= 10:
-            logger.info(f"Generic parser: processing line {idx}: {line[:150]}")
+            logger.warning(f"Generic parser: processing line {idx}: {line[:150]}")
         
         # Try each pattern
         m = None
@@ -725,13 +725,13 @@ def parse_excel_generic_rows(df) -> List[Dict[str, Any]]:
             m = pattern.search(line)
             if m:
                 if lines_matched < 3:
-                    logger.info(f"Generic parser: line {idx} matched pattern {pattern_idx + 1}: {line[:150]}")
+                    logger.warning(f"Generic parser: line {idx} matched pattern {pattern_idx + 1}: {line[:150]}")
                 break
         
         if not m:
             # Log first few non-matching lines for debugging
             if lines_processed <= 10:
-                logger.info(f"Generic parser: line {idx} didn't match any pattern: {line[:150]}")
+                logger.warning(f"Generic parser: line {idx} didn't match any pattern: {line[:150]}")
             continue
         
         lines_matched += 1
@@ -793,9 +793,11 @@ def parse_excel_generic_rows(df) -> List[Dict[str, Any]]:
             "ref_no": None,
         })
     
-    logger.info(f"Generic Excel parser: processed {lines_processed} lines, matched {lines_matched} transactions")
+    logger.warning(f"Generic Excel parser: processed {lines_processed} lines, matched {lines_matched} transactions")
     if rows and len(rows) > 0:
-        logger.info(f"Sample extracted row: {rows[0]}")
+        logger.warning(f"Sample extracted row: {rows[0]}")
+    elif lines_processed > 0:
+        logger.warning(f"⚠️ Generic parser processed {lines_processed} lines but matched 0 transactions. Check regex patterns.")
     
     return rows
 
