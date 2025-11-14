@@ -745,51 +745,86 @@ async def upload_xlsx_etl(
     
     logger.info(f"XLSX upload batch created: {batch_id} for user {user.user_id}, bank_code: {bank_code}, size: {size}")
     
-    # Try to get worker task
     try:
-        from app.workers.xls_worker import parse_xls
-    except Exception:
-        parse_xls = None  # No worker available
+        # -------- Celery path --------
+        try:
+            from app.workers.etl_worker import process_excel_etl
+            
+            # Read file content for worker
+            with open(path, "rb") as f:
+                file_content = f.read()
+            
+            # Dispatch to worker
+            task = process_excel_etl.delay(
+                user_id=str(user.user_id),
+                batch_id=str(batch_id),
+                file_name=file.filename or "upload.xlsx",
+                file_content=file_content,
+                bank_code=bank_code
+            )
+            
+            logger.info(f"Dispatched Excel ETL to worker: task_id={task.id}, batch={batch_id}")
+            
+            # Cleanup temp file (worker has its own copy)
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+            
+            return ETLResponse(
+                message="File received. Processing in background.",
+                batch_id=str(batch_id),
+                records_staged=0
+            )
+        except Exception as e:
+            # -------- Fallback: background thread using sync parser --------
+            logger.warning(f"Worker dispatch failed: {e}. Processing in background thread to avoid timeout.")
+            import threading
+            
+            def process_in_background():
+                try:
+                    _sync_parse_and_stage_excel(
+                        str(user.user_id),
+                        str(batch_id),
+                        file.filename or "upload.xlsx",
+                        path,
+                        bank_code
+                    )
+                finally:
+                    # Always cleanup temp file
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+            
+            thread = threading.Thread(target=process_in_background, daemon=True)
+            thread.start()
+            
+            return ETLResponse(
+                message="File received. Processing in background (sync mode).",
+                batch_id=str(batch_id),
+                records_staged=0
+            )
     
-    # For now, use sync fallback with bank_code
-    # TODO: Update worker to accept bank_code parameter
-    try:
-        records_staged, valid, invalid = _sync_parse_and_stage_excel(
-            str(user.user_id),
-            str(batch_id),
-            file.filename or "upload.xlsx",
-            path,
-            bank_code
-        )
-        
-        # Cleanup temp file
-        try:
-            os.remove(path)
-        except Exception:
-            pass
-        
-        return ETLResponse(
-            message=f"Upload processed: {valid} valid, {invalid} invalid",
-            batch_id=str(batch_id),
-            records_staged=records_staged,
-        )
-    except HTTPException:
-        # If lower layer raised an HTTPException, just bubble it up
-        try:
-            os.remove(path)
-        except Exception:
-            pass
-        raise
     except ValueError as e:
-        # Normalize to 400 for validation errors
+        # Validation errors → 400
         try:
             os.remove(path)
         except Exception:
             pass
         logger.error(f"Excel validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    
+    except HTTPException:
+        # Bubble up HTTPExceptions
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        raise
+    
     except Exception as e:
-        # Everything else is a real 500
+        # Real 500
         try:
             os.remove(path)
         except Exception:
@@ -1048,7 +1083,7 @@ def _sync_parse_and_stage_pdf(
     user_id: str,
     batch_id: str,
     file_name: str,
-    raw_bytes: bytes,
+    file_or_bytes: Any,
     bank_code: str = "GENERIC",
     password: Optional[str] = None
 ) -> Tuple[int, int, int]:
@@ -1057,6 +1092,14 @@ def _sync_parse_and_stage_pdf(
     session = SessionLocal()
     
     try:
+        # Accept both raw bytes and a file path
+        if isinstance(file_or_bytes, (bytes, bytearray)):
+            raw_bytes = file_or_bytes
+        else:
+            # assume it's a path-like
+            with open(file_or_bytes, "rb") as f:
+                raw_bytes = f.read()
+        
         # Parse PDF into canonical rows
         try:
             rows = parse_pdf_statement(raw_bytes, bank_code, password)
