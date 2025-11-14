@@ -152,18 +152,34 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
         
         # Find the header row by looking for common column names
         header_row_idx = None
-        date_keywords = ["date", "transaction date", "value date", "txn_date"]
-        desc_keywords = ["narration", "description", "remarks", "transaction remarks", "particulars"]
+        date_keywords = ["date", "transaction date", "value date", "txn_date", "value date", "tran date"]
+        desc_keywords = ["narration", "description", "remarks", "transaction remarks", "particulars", "narration/particulars"]
+        amount_keywords = ["withdrawal", "deposit", "debit", "credit", "amount", "withdrawal amt", "deposit amt"]
         
-        for idx in range(min(15, len(df_raw))):
+        for idx in range(min(20, len(df_raw))):
             row_values = [str(val).strip().lower() for val in df_raw.iloc[idx].values if pd.notna(val)]
-            has_date = any(keyword in " ".join(row_values) for keyword in date_keywords)
-            has_desc = any(keyword in " ".join(row_values) for keyword in desc_keywords)
+            row_text = " ".join(row_values)
             
-            if has_date and has_desc:
+            # Check for multiple indicators to be more robust
+            has_date = any(keyword in row_text for keyword in date_keywords)
+            has_desc = any(keyword in row_text for keyword in desc_keywords)
+            has_amount = any(keyword in row_text for keyword in amount_keywords)
+            
+            # Header row should have at least date + (description OR amount)
+            if has_date and (has_desc or has_amount):
                 header_row_idx = idx
-                logger.info(f"Found header row at index {idx} for bank {bank_code}")
+                logger.info(f"Found header row at index {idx} for bank {bank_code}. Row values: {row_values[:5]}")
                 break
+        
+        # If still not found, try a more lenient search - just look for "date" keyword
+        if header_row_idx is None:
+            for idx in range(min(20, len(df_raw))):
+                row_values = [str(val).strip().lower() for val in df_raw.iloc[idx].values if pd.notna(val)]
+                row_text = " ".join(row_values)
+                if any(keyword in row_text for keyword in date_keywords):
+                    header_row_idx = idx
+                    logger.info(f"Found header row at index {idx} (lenient match) for bank {bank_code}. Row values: {row_values[:5]}")
+                    break
         
         # Re-read the file with the correct header row
         if header_row_idx is not None:
@@ -176,7 +192,8 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
                     logger.error(f"Failed to read Excel file with header row {header_row_idx}: {e}")
                     raise HTTPException(status_code=400, detail=f"Failed to read Excel file: {str(e)}")
         else:
-            # Fallback: try reading with default header (row 0)
+            # Fallback: try reading with default header (row 0), but log a warning
+            logger.warning(f"Could not detect header row for {bank_code}, using row 0. First few rows: {df_raw.head(3).to_dict()}")
             try:
                 df = pd.read_excel(path, engine="openpyxl")
             except Exception:
@@ -186,11 +203,17 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
                     logger.error(f"Failed to read Excel file: {e}")
                     raise HTTPException(status_code=400, detail=f"Failed to read Excel file: {str(e)}")
         
+        # Log detected columns for debugging
+        logger.info(f"Detected columns after header detection: {list(df.columns)[:10]}")
+        
         # Normalize Excel columns → canonical fields
         try:
             rows = normalize_excel_df(df, bank_code)
         except ValueError as e:
+            # If normalization fails, try to provide more helpful error
             logger.error(f"Failed to normalize Excel: {e}")
+            logger.error(f"Available columns: {list(df.columns)}")
+            logger.error(f"First few rows of data: {df.head(3).to_dict()}")
             raise HTTPException(status_code=400, detail=str(e))
         
         # Categorize each row using rules table
