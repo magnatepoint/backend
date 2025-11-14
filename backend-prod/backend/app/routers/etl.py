@@ -347,6 +347,74 @@ def apply_categorization_rules(
     return categorized
 
 
+def read_excel_with_auto_header(path: str, bank_code: str):
+    """
+    Read Excel and try to auto-detect the header row for bank statements
+    (HDFC etc. that have big title rows before the actual table header).
+    """
+    import pandas as pd
+    
+    # Try normal read first
+    try:
+        df = pd.read_excel(path, engine="openpyxl")
+        # Quick check: if columns look reasonable, use it
+        cols_lower = [str(c).strip().lower() for c in df.columns]
+        if any("date" in c for c in cols_lower) and any(("narration" in c or "description" in c) for c in cols_lower):
+            return df
+    except Exception:
+        pass
+    
+    # Fallback: try xlrd for .xls files
+    try:
+        df = pd.read_excel(path, engine="xlrd")
+        cols_lower = [str(c).strip().lower() for c in df.columns]
+        if any("date" in c for c in cols_lower) and any(("narration" in c or "description" in c) for c in cols_lower):
+            return df
+    except Exception:
+        pass
+    
+    # Header detection (useful for HDFC with title rows)
+    try:
+        df_raw = pd.read_excel(path, header=None, engine="openpyxl", nrows=25)
+    except Exception:
+        try:
+            df_raw = pd.read_excel(path, header=None, engine="xlrd", nrows=25)
+        except Exception as e:
+            logger.error(f"Failed to read Excel file for header detection: {e}")
+            raise ValueError(f"Failed to read Excel file. Ensure it's a valid .xlsx or .xls file: {str(e)}")
+    
+    header_row_idx = None
+    
+    # Scan first N rows for something that looks like a header
+    max_scan = min(20, len(df_raw))
+    for i in range(max_scan):
+        row = df_raw.iloc[i].tolist()
+        row_texts = [str(x).strip().lower() for x in row if pd.notna(x)]
+        joined = " ".join(row_texts)
+        
+        # HDFC-style header usually has "date", "narration" and "withdrawal"/"deposit"
+        if "date" in joined and ("narration" in joined or "description" in joined) and (
+            "withdrawal" in joined or "deposit" in joined or "amount" in joined
+        ):
+            header_row_idx = i
+            logger.info(f"Auto-detected header row at index {i} for {bank_code}")
+            break
+    
+    if header_row_idx is not None:
+        try:
+            return pd.read_excel(path, header=header_row_idx, engine="openpyxl")
+        except Exception:
+            try:
+                return pd.read_excel(path, header=header_row_idx, engine="xlrd")
+            except Exception as e:
+                logger.error(f"Failed to read Excel file with header row {header_row_idx}: {e}")
+                raise ValueError(f"Failed to read Excel file with detected header: {str(e)}")
+    
+    # If we still can't detect, return raw and let normalize_excel_df complain
+    logger.warning(f"Could not auto-detect header row for {bank_code}, using raw DataFrame")
+    return df_raw
+
+
 def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, path: str, bank_code: str = "GENERIC") -> Tuple[int, int, int]:
     """Synchronous Excel parsing and staging with bank-specific normalization and categorization"""
     import pandas as pd
@@ -354,83 +422,14 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
     session = SessionLocal()
     
     try:
-        # First, read without headers to find the actual header row
-        # Try openpyxl first for .xlsx, fallback to xlrd for .xls
-        try:
-            df_raw = pd.read_excel(path, engine="openpyxl", header=None, nrows=20)
-        except Exception:
-            # Fallback to xlrd for .xls files
-            try:
-                df_raw = pd.read_excel(path, engine="xlrd", header=None, nrows=20)
-            except Exception as e:
-                logger.error(f"Failed to read Excel file: {e}")
-                raise HTTPException(status_code=400, detail=f"Failed to read Excel file. Ensure it's a valid .xlsx or .xls file: {str(e)}")
-        
-        # Find the header row by looking for common column names
-        header_row_idx = None
-        date_keywords = ["date", "transaction date", "value date", "txn_date", "value date", "tran date"]
-        desc_keywords = ["narration", "description", "remarks", "transaction remarks", "particulars", "narration/particulars"]
-        amount_keywords = ["withdrawal", "deposit", "debit", "credit", "amount", "withdrawal amt", "deposit amt"]
-        
-        for idx in range(min(20, len(df_raw))):
-            row_values = [str(val).strip().lower() for val in df_raw.iloc[idx].values if pd.notna(val)]
-            row_text = " ".join(row_values)
-            
-            # Check for multiple indicators to be more robust
-            has_date = any(keyword in row_text for keyword in date_keywords)
-            has_desc = any(keyword in row_text for keyword in desc_keywords)
-            has_amount = any(keyword in row_text for keyword in amount_keywords)
-            
-            # Header row should have at least date + (description OR amount)
-            if has_date and (has_desc or has_amount):
-                header_row_idx = idx
-                logger.info(f"Found header row at index {idx} for bank {bank_code}. Row values: {row_values[:5]}")
-                break
-        
-        # If still not found, try a more lenient search - just look for "date" keyword
-        if header_row_idx is None:
-            for idx in range(min(20, len(df_raw))):
-                row_values = [str(val).strip().lower() for val in df_raw.iloc[idx].values if pd.notna(val)]
-                row_text = " ".join(row_values)
-                if any(keyword in row_text for keyword in date_keywords):
-                    header_row_idx = idx
-                    logger.info(f"Found header row at index {idx} (lenient match) for bank {bank_code}. Row values: {row_values[:5]}")
-                    break
-        
-        # Re-read the file with the correct header row
-        if header_row_idx is not None:
-            try:
-                df = pd.read_excel(path, engine="openpyxl", header=header_row_idx)
-            except Exception:
-                try:
-                    df = pd.read_excel(path, engine="xlrd", header=header_row_idx)
-                except Exception as e:
-                    logger.error(f"Failed to read Excel file with header row {header_row_idx}: {e}")
-                    raise HTTPException(status_code=400, detail=f"Failed to read Excel file: {str(e)}")
-        else:
-            # Fallback: try reading with default header (row 0), but log a warning
-            logger.warning(f"Could not detect header row for {bank_code}, using row 0. First few rows: {df_raw.head(3).to_dict()}")
-            try:
-                df = pd.read_excel(path, engine="openpyxl")
-            except Exception:
-                try:
-                    df = pd.read_excel(path, engine="xlrd")
-                except Exception as e:
-                    logger.error(f"Failed to read Excel file: {e}")
-                    raise HTTPException(status_code=400, detail=f"Failed to read Excel file: {str(e)}")
+        # Use auto-header reader
+        df = read_excel_with_auto_header(path, bank_code)
         
         # Log detected columns for debugging
-        logger.info(f"Detected columns after header detection: {list(df.columns)[:10]}")
+        logger.info(f"Detected columns after auto-header detection: {list(df.columns)[:10]}")
         
         # Normalize Excel columns → canonical fields
-        try:
-            rows = normalize_excel_df(df, bank_code)
-        except ValueError as e:
-            # If normalization fails, try to provide more helpful error
-            logger.error(f"Failed to normalize Excel: {e}")
-            logger.error(f"Available columns: {list(df.columns)}")
-            logger.error(f"First few rows of data: {df.head(3).to_dict()}")
-            raise HTTPException(status_code=400, detail=str(e))
+        rows = normalize_excel_df(df, bank_code)
         
         # Categorize each row using rules table
         categorized_rows = apply_categorization_rules(session, rows, bank_code)
@@ -465,6 +464,10 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
             pipeline.load_to_production(batch_id)
         
         return len(txns), v.get("valid", 0), v.get("invalid", 0)
+    except ValueError as e:
+        # Let ValueError bubble up (will become 400)
+        logger.error(f"Excel validation error for batch {batch_id}: {e}")
+        raise
     except Exception as e:
         logger.exception(f"Error parsing Excel for batch {batch_id}")
         raise
@@ -758,8 +761,23 @@ async def upload_xlsx_etl(
             batch_id=str(batch_id),
             records_staged=records_staged,
         )
+    except HTTPException:
+        # If lower layer raised an HTTPException, just bubble it up
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        raise
+    except ValueError as e:
+        # Normalize to 400 for validation errors
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        logger.error(f"Excel validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        # Cleanup temp file on error
+        # Everything else is a real 500
         try:
             os.remove(path)
         except Exception:
