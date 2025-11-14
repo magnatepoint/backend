@@ -573,6 +573,7 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
             # First try auto-header detection
             df = read_excel_with_auto_header(path, bank_code)
             logger.info(f"Detected columns after auto-header detection: {list(df.columns)[:10]}")
+            logger.info(f"DataFrame shape: {df.shape}, first 3 rows:\n{df.head(3).to_string()}")
             
             # Try normalize_excel_df
             rows = normalize_excel_df(df, bank_code)
@@ -584,9 +585,17 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
             )
             # Re-read the file for fallback parser
             try:
-                df = pd.read_excel(path, engine="openpyxl")
+                df = pd.read_excel(path, engine="openpyxl", header=None)
             except Exception:
-                df = pd.read_excel(path, engine="xlrd")
+                try:
+                    df = pd.read_excel(path, engine="xlrd", header=None)
+                except Exception as read_err:
+                    logger.error(f"Failed to read Excel file for generic parser: {read_err}")
+                    raise ValueError(f"Failed to read Excel file: {read_err}")
+            
+            logger.info(f"Generic parser: DataFrame shape: {df.shape}")
+            logger.info(f"Generic parser: First 10 rows (raw):\n{df.head(10).to_string()}")
+            
             rows = parse_excel_generic_rows(df)
             logger.info(f"Generic Excel parser produced {len(rows)} canonical rows")
         
@@ -816,17 +825,23 @@ def parse_excel_generic_rows(df) -> List[Dict[str, Any]]:
         
         lines_processed += 1
         
+        # Log first few lines for debugging
+        if lines_processed <= 10:
+            logger.info(f"Generic parser: processing line {idx}: {line[:150]}")
+        
         # Try each pattern
         m = None
-        for pattern in patterns:
+        for pattern_idx, pattern in enumerate(patterns):
             m = pattern.search(line)
             if m:
+                if lines_matched < 3:
+                    logger.info(f"Generic parser: line {idx} matched pattern {pattern_idx + 1}: {line[:150]}")
                 break
         
         if not m:
             # Log first few non-matching lines for debugging
-            if lines_processed <= 5:
-                logger.debug(f"Generic parser: line {idx} didn't match any pattern: {line[:100]}")
+            if lines_processed <= 10:
+                logger.info(f"Generic parser: line {idx} didn't match any pattern: {line[:150]}")
             continue
         
         lines_matched += 1
