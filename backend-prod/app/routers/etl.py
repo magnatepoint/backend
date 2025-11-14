@@ -558,18 +558,44 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
     session = SessionLocal()
     
     try:
-        # Use auto-header reader
-        df = read_excel_with_auto_header(path, bank_code)
+        # Read Excel file (try openpyxl first, then xlrd for .xls)
+        try:
+            df = pd.read_excel(path, engine="openpyxl")
+        except Exception:
+            try:
+                df = pd.read_excel(path, engine="xlrd")
+            except Exception as e:
+                logger.error(f"Failed to read Excel file: {e}")
+                raise ValueError(f"Failed to read Excel file. Ensure it's a valid .xlsx or .xls file: {str(e)}")
         
-        # Log detected columns for debugging
-        logger.info(f"Detected columns after auto-header detection: {list(df.columns)[:10]}")
+        # Try bank-specific normalization, else generic row parser
+        try:
+            # First try auto-header detection
+            df = read_excel_with_auto_header(path, bank_code)
+            logger.info(f"Detected columns after auto-header detection: {list(df.columns)[:10]}")
+            
+            # Try normalize_excel_df
+            rows = normalize_excel_df(df, bank_code)
+            logger.info(f"Excel normalize produced {len(rows)} canonical rows for bank_code={bank_code}")
+        except ValueError as e:
+            logger.warning(
+                f"normalize_excel_df failed for bank_code={bank_code}: {e}. "
+                f"Falling back to generic Excel row parser."
+            )
+            # Re-read the file for fallback parser
+            try:
+                df = pd.read_excel(path, engine="openpyxl")
+            except Exception:
+                df = pd.read_excel(path, engine="xlrd")
+            rows = parse_excel_generic_rows(df)
+            logger.info(f"Generic Excel parser produced {len(rows)} canonical rows")
         
-        # Normalize Excel columns → canonical fields
-        rows = normalize_excel_df(df, bank_code)
-        
-        logger.info(f"Excel normalize produced {len(rows)} canonical rows for bank_code={bank_code}")
         if rows:
             logger.info(f"Sample row[0]: {rows[0]}")
+        
+        if not rows:
+            logger.warning(f"No transactions found in Excel for batch {batch_id}")
+            return 0, 0, 0
         
         # Categorize each row using rules table
         categorized_rows = apply_categorization_rules(session, rows, bank_code)
@@ -742,6 +768,79 @@ async def upload_xlsx_etl(
             pass
         logger.exception(f"Error processing Excel upload: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process Excel file: {str(e)}")
+
+
+def parse_excel_generic_rows(df) -> List[Dict[str, Any]]:
+    """
+    Fallback Excel parser when we can't understand columns.
+    
+    Strategy:
+      - Join all cell values in a row into a single string
+      - Use the same regex pattern as PDF generic parser:
+        DD/MM/YYYY  description.....  amount  DR/CR
+    """
+    import pandas as pd
+    
+    rows: List[Dict[str, Any]] = []
+    
+    # Normalize all cells to string and fill NaNs
+    df_str = df.fillna("").astype(str)
+    
+    # Same pattern as parse_pdf_generic_lines
+    pattern = re.compile(
+        r"(?P<date>\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+"
+        r"(?P<desc>.+?)\s+"
+        r"(?P<amount>[0-9,]+\.?\d{0,2})\s+"
+        r"(?P<dc>DR|CR|DEBIT|CREDIT)",
+        re.IGNORECASE,
+    )
+    
+    for _, row in df_str.iterrows():
+        # Join all columns into one line like "col0 col1 col2 ..."
+        line = " ".join([v.strip() for v in row.values if v and v.strip()])
+        if not line:
+            continue
+        
+        m = pattern.search(line)
+        if not m:
+            continue
+        
+        dt_raw = m.group("date")
+        desc = m.group("desc").strip()
+        amt_raw = m.group("amount").replace(",", "")
+        dc = m.group("dc").upper()
+        
+        try:
+            # Try DD/MM/YYYY first, then DD-MM-YYYY
+            try:
+                dt = datetime.strptime(dt_raw, "%d/%m/%Y").date()
+            except ValueError:
+                try:
+                    dt = datetime.strptime(dt_raw, "%d/%m/%y").date()
+                except ValueError:
+                    try:
+                        dt = datetime.strptime(dt_raw, "%d-%m-%Y").date()
+                    except ValueError:
+                        dt = datetime.strptime(dt_raw, "%d-%m-%y").date()
+        except ValueError:
+            continue
+        
+        try:
+            amount = float(amt_raw)
+        except ValueError:
+            continue
+        
+        direction = "debit" if dc in ("DR", "DEBIT") else "credit"
+        
+        rows.append({
+            "txn_date": dt,
+            "amount": amount,
+            "direction": direction,
+            "description": desc,
+            "ref_no": None,
+        })
+    
+    return rows
 
 
 def parse_pdf_generic_lines(text: str) -> List[Dict[str, Any]]:
