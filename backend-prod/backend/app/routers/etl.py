@@ -140,6 +140,25 @@ def normalize_excel_df(df, bank_code: str) -> List[Dict[str, Any]]:
     
     # Clean columns
     df = df.rename(columns={c: str(c).strip().lower() for c in df.columns})
+    cols = list(df.columns)
+    logger.info(f"normalize_excel_df: bank_code={bank_code}, columns={cols}")
+    
+    # 🔍 Auto-detect bank if GENERIC and first cell contains bank name
+    try:
+        first_cell = str(df.iloc[0, 0]).lower()
+    except Exception:
+        first_cell = ""
+    
+    if bank_code.upper() == "GENERIC":
+        if "hdfc" in first_cell and "bank" in first_cell:
+            logger.info("Auto-detected HDFC from sheet content, overriding bank_code to HDFC")
+            bank_code = "HDFC"
+        elif "icici" in first_cell and "bank" in first_cell:
+            logger.info("Auto-detected ICICI from sheet content, overriding bank_code to ICICI")
+            bank_code = "ICICI"
+        elif "state bank of india" in first_cell or "sbi" in first_cell:
+            logger.info("Auto-detected SBI from sheet content, overriding bank_code to SBI")
+            bank_code = "SBI"
     
     mapping: Dict[str, Dict[str, str]] = {}
     
@@ -350,68 +369,131 @@ def apply_categorization_rules(
 def read_excel_with_auto_header(path: str, bank_code: str):
     """
     Read Excel and try to auto-detect the header row for bank statements
-    (HDFC etc. that have big title rows before the actual table header).
+    (HDFC/ICICI/SBI/other) that have title rows before the actual table header.
     """
     import pandas as pd
+    import logging
     
-    # Try normal read first
-    try:
-        df = pd.read_excel(path, engine="openpyxl")
-        # Quick check: if columns look reasonable, use it
-        cols_lower = [str(c).strip().lower() for c in df.columns]
-        if any("date" in c for c in cols_lower) and any(("narration" in c or "description" in c) for c in cols_lower):
-            return df
-    except Exception:
-        pass
+    logger = logging.getLogger(__name__)
     
-    # Fallback: try xlrd for .xls files
+    # First, naive read (header=0)
     try:
-        df = pd.read_excel(path, engine="xlrd")
-        cols_lower = [str(c).strip().lower() for c in df.columns]
-        if any("date" in c for c in cols_lower) and any(("narration" in c or "description" in c) for c in cols_lower):
-            return df
-    except Exception:
-        pass
-    
-    # Header detection (useful for HDFC with title rows)
-    try:
-        df_raw = pd.read_excel(path, header=None, engine="openpyxl", nrows=25)
+        df_default = pd.read_excel(path, engine="openpyxl")
+        # If default read already gives us useful headers (has 'date' and desc col), just use it
+        cols_norm = [str(c).strip().lower() for c in df_default.columns]
+        if any("date" in c for c in cols_norm) and any(
+            any(x in c for x in ["narration", "description", "particulars"])
+            for c in cols_norm
+        ):
+            logger.info(f"Using default header row for {bank_code}: {cols_norm}")
+            return df_default
     except Exception:
         try:
-            df_raw = pd.read_excel(path, header=None, engine="xlrd", nrows=25)
+            df_default = pd.read_excel(path, engine="xlrd")
+            cols_norm = [str(c).strip().lower() for c in df_default.columns]
+            if any("date" in c for c in cols_norm) and any(
+                any(x in c for x in ["narration", "description", "particulars"])
+                for c in cols_norm
+            ):
+                logger.info(f"Using default header row for {bank_code}: {cols_norm}")
+                return df_default
+        except Exception as e:
+            logger.warning(f"Default Excel read failed, falling back to header=None: {e}")
+    
+    # Fallback: header=None read for scanning
+    try:
+        df_raw = pd.read_excel(path, header=None, engine="openpyxl")
+    except Exception:
+        try:
+            df_raw = pd.read_excel(path, header=None, engine="xlrd")
         except Exception as e:
             logger.error(f"Failed to read Excel file for header detection: {e}")
             raise ValueError(f"Failed to read Excel file. Ensure it's a valid .xlsx or .xls file: {str(e)}")
     
+    max_scan = min(100, len(df_raw))
+    
+    def is_header_row(row_values: list) -> bool:
+        texts = [str(x).strip().lower() for x in row_values if str(x).strip() not in ("", "nan")]
+        if not texts:
+            return False
+        joined = " ".join(texts)
+        
+        has_date = any("date" in t for t in texts)
+        has_desc = any(x in joined for x in ["narration", "description", "particulars"])
+        has_money = any(
+            x in joined
+            for x in [
+                "withdrawal",
+                "deposit",
+                "debit",
+                "credit",
+                "amount",
+                "balance",
+                "dr",
+                "cr",
+            ]
+        )
+        
+        # Typical bank header: Date + (Narration/Description/Particulars) + some money col
+        if has_date and (has_desc or has_money):
+            return True
+        return False
+    
     header_row_idx = None
     
-    # Scan first N rows for something that looks like a header
-    max_scan = min(20, len(df_raw))
+    # Pass 1: strict-ish detection
     for i in range(max_scan):
         row = df_raw.iloc[i].tolist()
-        row_texts = [str(x).strip().lower() for x in row if pd.notna(x)]
-        joined = " ".join(row_texts)
-        
-        # HDFC-style header usually has "date", "narration" and "withdrawal"/"deposit"
-        if "date" in joined and ("narration" in joined or "description" in joined) and (
-            "withdrawal" in joined or "deposit" in joined or "amount" in joined
-        ):
+        if is_header_row(row):
             header_row_idx = i
-            logger.info(f"Auto-detected header row at index {i} for {bank_code}")
+            logger.info(f"Detected header row {i} for {bank_code} (strict match)")
             break
+    
+    # Pass 2: looser rule if not found
+    if header_row_idx is None:
+        for i in range(max_scan):
+            row = df_raw.iloc[i].tolist()
+            texts = [str(x).strip().lower() for x in row if str(x).strip() not in ("", "nan")]
+            if not texts:
+                continue
+            joined = " ".join(texts)
+            if "date" in joined and any(x in joined for x in ["narration", "description", "particulars"]):
+                header_row_idx = i
+                logger.info(f"Detected header row {i} for {bank_code} (loose match)")
+                break
     
     if header_row_idx is not None:
         try:
-            return pd.read_excel(path, header=header_row_idx, engine="openpyxl")
+            df = pd.read_excel(path, header=header_row_idx, engine="openpyxl")
+            return df
         except Exception:
             try:
-                return pd.read_excel(path, header=header_row_idx, engine="xlrd")
+                df = pd.read_excel(path, header=header_row_idx, engine="xlrd")
+                return df
             except Exception as e:
                 logger.error(f"Failed to read Excel file with header row {header_row_idx}: {e}")
                 raise ValueError(f"Failed to read Excel file with detected header: {str(e)}")
     
-    # If we still can't detect, return raw and let normalize_excel_df complain
-    logger.warning(f"Could not auto-detect header row for {bank_code}, using raw DataFrame")
+    # As an extra fallback: if all column names are numeric, try using first non-empty row as header
+    # This is mostly for weird sheets where pandas can't infer anything sensible.
+    if all(isinstance(c, (int, float)) for c in df_raw.columns):
+        logger.warning(
+            f"Could not auto-detect header row for {bank_code}, using first non-empty row as header"
+        )
+        first_non_empty_idx = None
+        for i in range(len(df_raw)):
+            row = df_raw.iloc[i].tolist()
+            if any(str(x).strip() not in ("", "nan") for x in row):
+                first_non_empty_idx = i
+                break
+        
+        if first_non_empty_idx is not None:
+            header = [str(x).strip().lower() for x in df_raw.iloc[first_non_empty_idx].tolist()]
+            df = df_raw.iloc[first_non_empty_idx + 1 :].copy()
+            df.columns = header
+            return df
+    
+    logger.error(f"Could not auto-detect header row for {bank_code}, using raw DataFrame")
     return df_raw
 
 
