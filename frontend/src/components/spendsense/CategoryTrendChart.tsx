@@ -1,4 +1,3 @@
-import React from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { motion } from 'framer-motion'
 import { formatCurrency } from '../../lib/utils'
@@ -38,20 +37,23 @@ export function CategoryTrendChart({ trends, loading }: CategoryTrendChartProps)
   }
 
   // Prepare data for Recharts (group by month)
-  const monthMap = new Map<string, Record<string, number>>()
+  const monthMap = new Map<string, Record<string, number | string>>()
   
   trends.forEach(trend => {
     trend.data.forEach(({ month, spend }) => {
-      if (!monthMap.has(month)) {
-        monthMap.set(month, { month })
+      const monthStr = typeof month === 'string' ? month : String(month)
+      if (!monthMap.has(monthStr)) {
+        monthMap.set(monthStr, { month: monthStr as string })
       }
-      monthMap.get(month)![trend.category_name] = spend
+      monthMap.get(monthStr)![trend.category_name] = spend
     })
   })
 
-  const chartData = Array.from(monthMap.values()).sort((a, b) => 
-    a.month.localeCompare(b.month)
-  )
+  const chartData = Array.from(monthMap.values()).sort((a, b) => {
+    const aMonth = String(a.month)
+    const bMonth = String(b.month)
+    return aMonth.localeCompare(bMonth)
+  })
 
   // Color palette
   const colors = [

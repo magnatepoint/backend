@@ -47,7 +47,8 @@ export default function AllocationDonut({ data, title = 'Budget Allocation' }: A
             label={(props: PieLabelRenderProps) => {
               const { name, percent } = props
               if (!name) return ''
-              return `${name} ${(((percent ?? 0)) * 100).toFixed(0)}%`
+              const percentValue = typeof percent === 'number' ? percent : 0
+              return `${name} ${(percentValue * 100).toFixed(0)}%`
             }}
             outerRadius={70}
             fill="#8884d8"

@@ -1,4 +1,3 @@
-import React from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { formatCurrency, formatDate } from '../../lib/utils'
 
@@ -27,7 +26,6 @@ interface CategoryDrilldownModalProps {
 export function CategoryDrilldownModal({
   isOpen,
   onClose,
-  category,
   categoryName,
   transactions,
   totalAmount,

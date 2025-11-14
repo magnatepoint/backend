@@ -1,5 +1,4 @@
-import React from 'react'
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts'
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
 import { motion } from 'framer-motion'
 import { formatCurrency } from '../../lib/utils'
 
@@ -68,7 +67,12 @@ export function MerchantAnalytics({ merchants, loading }: MerchantAnalyticsProps
                 outerRadius={80}
                 fill="#8884d8"
                 dataKey="value"
-                label={({ name, percent }) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`}
+                label={(props: { name?: string; percent?: number }) => {
+                  const { name, percent } = props
+                  if (!name) return ''
+                  const percentValue = typeof percent === 'number' ? percent : 0
+                  return `${name}: ${(percentValue * 100).toFixed(0)}%`
+                }}
               >
                 {chartData.map((_, index) => (
                   <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />

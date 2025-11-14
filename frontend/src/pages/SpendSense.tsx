@@ -16,7 +16,7 @@ import { BudgetDeviation } from '../components/spendsense/BudgetDeviation'
 import { GoalImpact } from '../components/spendsense/GoalImpact'
 import { CashFlowProjection } from '../components/spendsense/CashFlowProjection'
 import { MerchantAnalytics } from '../components/spendsense/MerchantAnalytics'
-import { FilterChips, PaymentMode, MerchantType } from '../components/spendsense/FilterChips'
+import { FilterChips } from '../components/spendsense/FilterChips'
 import { CategoryDrilldownModal } from '../components/spendsense/CategoryDrilldownModal'
 import { Milestones } from '../components/spendsense/Milestones'
 import { motion } from 'framer-motion'
@@ -214,17 +214,11 @@ export default function SpendSense() {
   
   // Filter and drilldown state
   const [drilldownCategory, setDrilldownCategory] = useState<{ category: string; categoryName: string } | null>(null)
-  const [milestones, setMilestones] = useState<any[]>([])
-  const [forecastData, setForecastData] = useState<{ forecasts: any[]; period?: any } | null>(null)
+  const [milestones] = useState<any[]>([])
   const [paymentModeFilter, setPaymentModeFilter] = useState<string[]>([])
   const [merchantTypeFilter, setMerchantTypeFilter] = useState<string[]>([])
   const [locationFilter, setLocationFilter] = useState<string[]>([])
   const [hasShownInsightsToast, setHasShownInsightsToast] = useState(false)
-
-  const handleTabChange = (tab: 'overview' | 'intelligence' | 'analytics' | 'budget' | 'goals') => {
-    setActiveTab(tab)
-    setHasShownInsightsToast(false)
-  }
 
   const toggleFilterValue = (value: string, setter: React.Dispatch<React.SetStateAction<string[]>>) => {
     setter((prev) => (prev.includes(value) ? prev.filter((entry) => entry !== value) : [...prev, value]))
@@ -237,11 +231,6 @@ export default function SpendSense() {
   }
 
   const handleCategoryDrilldown = (categoryCode: string, displayName: string) => {
-    const normalizedCode = (categoryCode || '').toLowerCase()
-    const matching = transactionsWithMeta.filter((txn) => {
-      const txnCode = (txn.category_code || txn.category || '').toLowerCase()
-      return txnCode === normalizedCode
-    })
     setDrilldownCategory({
       category: categoryCode,
       categoryName: displayName
@@ -523,7 +512,6 @@ export default function SpendSense() {
         budgetData,
         goalsData,
         cashflowData,
-        forecastDataRes,
         merchantMetricsData
       ] = await Promise.all([
         apiClient.getAISpendingAdvice().catch(() => ({ advice: [] })),
@@ -533,7 +521,6 @@ export default function SpendSense() {
         apiClient.getBudgetDeviation().catch(() => ({ deviations: [] })),
         apiClient.getGoalImpact().catch(() => ({ goals: [] })),
         apiClient.getCashFlowProjection(3).catch(() => ({ projections: [] })),
-        apiClient.getSpendingForecast(6).catch(() => ({ forecasts: [] })),
         apiClient.getMerchantMetrics(10, 3).catch(() => ({ merchants: [] }))
       ])
       
@@ -544,7 +531,6 @@ export default function SpendSense() {
       setBudgetDeviation(budgetData)
       setGoalImpact(goalsData)
       setCashFlowProjection(cashflowData)
-      setForecastData(forecastDataRes || null)
       setMerchantAnalytics(merchantMetricsData.merchants || [])
       if (!hasShownInsightsToast) {
         showToast('✨ AI Insights Updated!', 'success')
@@ -1207,19 +1193,19 @@ export default function SpendSense() {
               title="Payment Mode"
               options={paymentModeOptions}
               selected={paymentModeFilter}
-              onToggle={(value) => toggleFilterValue(value, setPaymentModeFilter)}
+              onToggle={(value: string) => toggleFilterValue(value, setPaymentModeFilter)}
             />
             <FilterChips
               title="Merchant Type"
               options={merchantTypeOptions}
               selected={merchantTypeFilter}
-              onToggle={(value) => toggleFilterValue(value, setMerchantTypeFilter)}
+              onToggle={(value: string) => toggleFilterValue(value, setMerchantTypeFilter)}
             />
             <FilterChips
               title="Location"
               options={locationOptions}
               selected={locationFilter}
-              onToggle={(value) => toggleFilterValue(value, setLocationFilter)}
+              onToggle={(value: string) => toggleFilterValue(value, setLocationFilter)}
             />
           </div>
 
