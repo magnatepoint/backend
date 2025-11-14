@@ -198,6 +198,7 @@ export default function SpendSense() {
   const [showImportModal, setShowImportModal] = useState(false)
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importBankCode, setImportBankCode] = useState<string>('GENERIC')
+  const [importPassword, setImportPassword] = useState<string>('')
   const [importErrors, setImportErrors] = useState<Array<{ row: number; field: string | null; message: string }>>([])
   const [importing, setImporting] = useState(false)
   
@@ -657,13 +658,22 @@ export default function SpendSense() {
       const fileExt = importFile.name.toLowerCase()
       let result
 
-      if (fileExt.endsWith('.xlsx')) {
+      if (fileExt.endsWith('.xlsx') || fileExt.endsWith('.xls')) {
         // Use ETL endpoint for Excel with bank-specific parsing
         result = await apiClient.uploadExcelETL(importFile, importBankCode)
         showToast(`Imported ${result.records_staged || 0} records. Categorized automatically; you can edit categories in Recent Transactions.`, 'success')
         setShowImportModal(false)
         setImportFile(null)
         setImportBankCode('GENERIC')
+        loadData() // Reload transactions
+      } else if (fileExt.endsWith('.pdf')) {
+        // Use ETL endpoint for PDF with bank-specific parsing
+        result = await apiClient.uploadPDFETL(importFile, importBankCode, importPassword || undefined)
+        showToast(`Imported ${result.records_staged || 0} records. Categorized automatically; you can edit categories in Recent Transactions.`, 'success')
+        setShowImportModal(false)
+        setImportFile(null)
+        setImportBankCode('GENERIC')
+        setImportPassword('')
         loadData() // Reload transactions
       } else if (fileExt.endsWith('.csv')) {
         // Use existing bulk import for CSV (or switch to ETL if preferred)
@@ -693,12 +703,14 @@ export default function SpendSense() {
     const file = e.target.files?.[0]
     if (file) {
       const ext = file.name.toLowerCase()
-      if (!ext.endsWith('.xlsx') && !ext.endsWith('.csv')) {
-        showToast('Please select a .xlsx or .csv file', 'warning')
+      if (!ext.endsWith('.xlsx') && !ext.endsWith('.xls') && !ext.endsWith('.csv') && !ext.endsWith('.pdf')) {
+        showToast('Please select a .xlsx, .xls, .csv, or .pdf file', 'warning')
         return
       }
       setImportFile(file)
       setImportErrors([])
+      // Reset password when file changes
+      setImportPassword('')
     }
   }
 
@@ -1707,10 +1719,10 @@ export default function SpendSense() {
               
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Select File (.xlsx or .csv)</label>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Select File (.xlsx, .xls, .csv, or .pdf)</label>
                   <input
                     type="file"
-                    accept=".xlsx,.csv"
+                    accept=".xlsx,.xls,.csv,.pdf"
                     onChange={handleFileSelect}
                     className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-yellow-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700"
                   />
@@ -1719,9 +1731,9 @@ export default function SpendSense() {
                   )}
                 </div>
 
-                {importFile && importFile.name.toLowerCase().endsWith('.xlsx') && (
+                {(importFile && (importFile.name.toLowerCase().endsWith('.xlsx') || importFile.name.toLowerCase().endsWith('.xls') || importFile.name.toLowerCase().endsWith('.pdf'))) && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">Bank (for Excel column mapping)</label>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">Bank (for column/format mapping)</label>
                     <select
                       value={importBankCode}
                       onChange={(e) => setImportBankCode(e.target.value)}
@@ -1733,7 +1745,23 @@ export default function SpendSense() {
                       <option value="SBI">State Bank of India</option>
                     </select>
                     <p className="mt-1 text-xs text-gray-400">
-                      Select your bank for automatic column mapping. Transactions will be auto-categorized.
+                      Select your bank for automatic column/format mapping. Transactions will be auto-categorized.
+                    </p>
+                  </div>
+                )}
+
+                {importFile && importFile.name.toLowerCase().endsWith('.pdf') && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">PDF Password (optional)</label>
+                    <input
+                      type="password"
+                      value={importPassword}
+                      onChange={(e) => setImportPassword(e.target.value)}
+                      placeholder="Enter password if PDF is password-protected"
+                      className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-yellow-500"
+                    />
+                    <p className="mt-1 text-xs text-gray-400">
+                      Only required if your PDF bank statement is password-protected.
                     </p>
                   </div>
                 )}
@@ -1755,7 +1783,9 @@ export default function SpendSense() {
 
                 <div className="bg-blue-900/20 border border-blue-500 rounded-lg p-4">
                   <p className="text-sm text-blue-300">
-                    <strong>Excel files:</strong> Select your bank for automatic column mapping. Transactions will be auto-categorized using rule-based categorization.
+                    <strong>Excel files (.xlsx, .xls):</strong> Select your bank for automatic column mapping. Transactions will be auto-categorized using rule-based categorization.
+                    <br />
+                    <strong>PDF files:</strong> Select your bank for format-specific parsing. If your PDF is password-protected, enter the password. Transactions will be auto-categorized.
                     <br />
                     <strong>CSV files:</strong> Download the template first to ensure correct format. All rows must be valid for import to succeed.
                   </p>
@@ -1783,6 +1813,8 @@ export default function SpendSense() {
                   onClick={() => {
                     setShowImportModal(false)
                     setImportFile(null)
+                    setImportBankCode('GENERIC')
+                    setImportPassword('')
                     setImportErrors([])
                   }}
                   disabled={importing}

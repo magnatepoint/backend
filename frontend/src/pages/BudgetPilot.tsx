@@ -283,8 +283,8 @@ export default function BudgetPilot() {
         <header className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold mb-2 bg-gradient-to-r from-yellow-400 via-yellow-500 to-yellow-600 bg-clip-text text-transparent drop-shadow-[0_0_15px_rgba(212,175,55,0.5)]">
-              BudgetPilot
-            </h1>
+            BudgetPilot
+          </h1>
             <div className="text-gray-400 text-sm">Periodized Budget Planning</div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -338,8 +338,8 @@ export default function BudgetPilot() {
             defaultType={periodType}
             selectedStart={periodStart}
             selectedEnd={periodEnd}
-          />
-        </div>
+                    />
+                  </div>
 
         {/* Metrics */}
         <section className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -393,13 +393,13 @@ export default function BudgetPilot() {
                   activeTab === tab
                     ? 'text-yellow-400 border-b-2 border-yellow-400'
                     : 'text-gray-400 hover:text-gray-300'
-                }`}
+                      }`}
               >
                 {tab.charAt(0).toUpperCase() + tab.slice(1)}
               </button>
             ))}
-          </div>
-        )}
+                  </div>
+                )}
 
         {/* Tab Content */}
         {activeTab === 'overview' && (
@@ -440,7 +440,7 @@ export default function BudgetPilot() {
                   />
                 )}
               </section>
-            )}
+                )}
 
             {/* Category Microcards */}
             {categories.length > 0 && (
@@ -497,8 +497,8 @@ export default function BudgetPilot() {
                   }))}
                   title="Total Spending vs Plan"
                 />
-              </div>
-            )}
+                        </div>
+                      )}
           </section>
         )}
 

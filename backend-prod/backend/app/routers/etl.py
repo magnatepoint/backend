@@ -9,6 +9,7 @@ import os
 import logging
 import re
 from datetime import datetime, date
+from io import BytesIO
 from app.routers.auth import get_current_user, UserDep
 from app.services.etl_pipeline import ETLPipeline
 from app.routers._upload_utils import save_upload_to_temp, ensure_csv_mime, ensure_excel_mime
@@ -347,8 +348,17 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
     session = SessionLocal()
     
     try:
-        # Use openpyxl engine explicitly for .xlsx files
-        df = pd.read_excel(path, engine="openpyxl")
+        # pandas.read_excel handles both .xlsx (openpyxl) and .xls (xlrd) automatically
+        # Try openpyxl first for .xlsx, fallback to xlrd for .xls
+        try:
+            df = pd.read_excel(path, engine="openpyxl")
+        except Exception:
+            # Fallback to xlrd for .xls files
+            try:
+                df = pd.read_excel(path, engine="xlrd")
+            except Exception as e:
+                logger.error(f"Failed to read Excel file: {e}")
+                raise HTTPException(status_code=400, detail=f"Failed to read Excel file. Ensure it's a valid .xlsx or .xls file: {str(e)}")
         
         # Normalize Excel columns → canonical fields
         try:
@@ -392,6 +402,182 @@ def _sync_parse_and_stage_excel(user_id: str, batch_id: str, file_name: str, pat
         return len(txns), v.get("valid", 0), v.get("invalid", 0)
     except Exception as e:
         logger.exception(f"Error parsing Excel for batch {batch_id}")
+        raise
+    finally:
+        session.close()
+
+
+def parse_pdf_generic_lines(text: str) -> List[Dict[str, Any]]:
+    """
+    Generic PDF line parser - extracts transactions from text lines.
+    Pattern: DD/MM/YYYY  description.....  amount  DR/CR
+    """
+    lines = text.splitlines()
+    out: List[Dict[str, Any]] = []
+    
+    # Pattern: DD/MM/YYYY or DD-MM-YYYY  description  amount  DR/CR
+    pattern = re.compile(
+        r"(?P<date>\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+(?P<desc>.+?)\s+(?P<amount>[0-9,]+\.?\d{0,2})\s+(?P<dc>DR|CR|DEBIT|CREDIT)",
+        re.IGNORECASE,
+    )
+    
+    for line in lines:
+        m = pattern.search(line)
+        if not m:
+            continue
+        
+        dt_raw = m.group("date")
+        desc = m.group("desc").strip()
+        amt_raw = m.group("amount").replace(",", "")
+        dc = m.group("dc").upper()
+        
+        try:
+            # Try DD/MM/YYYY first
+            try:
+                dt = datetime.strptime(dt_raw, "%d/%m/%Y").date()
+            except ValueError:
+                try:
+                    dt = datetime.strptime(dt_raw, "%d/%m/%y").date()
+                except ValueError:
+                    # Try DD-MM-YYYY
+                    try:
+                        dt = datetime.strptime(dt_raw, "%d-%m-%Y").date()
+                    except ValueError:
+                        dt = datetime.strptime(dt_raw, "%d-%m-%y").date()
+        except ValueError:
+            continue
+        
+        try:
+            amount = float(amt_raw)
+        except ValueError:
+            continue
+        
+        direction = "debit" if dc in ("DR", "DEBIT") else "credit"
+        
+        out.append({
+            "txn_date": dt,
+            "amount": amount,
+            "direction": direction,
+            "description": desc,
+            "ref_no": None,
+        })
+    
+    return out
+
+
+def parse_pdf_bank_text(text: str, bank: str) -> List[Dict[str, Any]]:
+    """
+    Bank-specific PDF parser. For now, uses generic parser.
+    Can be enhanced with bank-specific table extraction or regex patterns.
+    """
+    if bank in ("HDFC", "ICICI", "SBI"):
+        # Start with generic parser, can be enhanced with bank-specific logic
+        # For example, HDFC often has: "Date   Narration   Chq/Ref  Withdrawal  Deposit  Balance"
+        return parse_pdf_generic_lines(text)
+    else:
+        return parse_pdf_generic_lines(text)
+
+
+def parse_pdf_statement(
+    raw_bytes: bytes,
+    bank_code: str,
+    password: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Parse PDF bank statement into canonical transaction rows.
+    
+    Returns:
+        List of dicts with: txn_date, amount, direction, description, ref_no
+    """
+    try:
+        import pdfplumber
+    except ImportError:
+        raise ValueError("pdfplumber is required for PDF parsing. Install with: pip install pdfplumber")
+    
+    rows: List[Dict[str, Any]] = []
+    
+    try:
+        with pdfplumber.open(BytesIO(raw_bytes), password=password) as pdf:
+            all_text_pages = [page.extract_text() or "" for page in pdf.pages]
+    except Exception as e:
+        if "password" in str(e).lower() or "encrypted" in str(e).lower():
+            raise ValueError("PDF is password protected. Please provide the password.")
+        raise ValueError(f"Failed to open PDF: {str(e)}")
+    
+    bank = bank_code.upper()
+    
+    # Extract transactions from each page
+    for page_text in all_text_pages:
+        if bank in ("HDFC", "ICICI", "SBI"):
+            rows.extend(parse_pdf_bank_text(page_text, bank))
+        else:
+            rows.extend(parse_pdf_generic_lines(page_text))
+    
+    return rows
+
+
+def _sync_parse_and_stage_pdf(
+    user_id: str,
+    batch_id: str,
+    file_name: str,
+    raw_bytes: bytes,
+    bank_code: str = "GENERIC",
+    password: Optional[str] = None
+) -> Tuple[int, int, int]:
+    """Synchronous PDF parsing and staging with bank-specific parsing and categorization"""
+    pipeline = ETLPipeline(user_id)
+    session = SessionLocal()
+    
+    try:
+        # Parse PDF into canonical rows
+        try:
+            rows = parse_pdf_statement(raw_bytes, bank_code, password)
+        except ValueError as e:
+            logger.error(f"Failed to parse PDF: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            logger.error(f"Failed to parse PDF: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to parse PDF: {str(e)}")
+        
+        if not rows:
+            logger.warning(f"No transactions found in PDF for batch {batch_id}")
+            return 0, 0, 0
+        
+        # Categorize each row using rules table
+        categorized_rows = apply_categorization_rules(session, rows, bank_code)
+        
+        # Convert to StagedTxnIn format
+        txns = []
+        for idx, r in enumerate(categorized_rows):
+            try:
+                tx = StagedTxnIn(
+                    amount=r["amount"],
+                    transaction_date=r["txn_date"],
+                    description=r["description"],
+                    merchant=None,
+                    bank=bank_code,
+                    category=r["primary_category"],
+                    reference_id=r.get("ref_no"),
+                    currency="INR",
+                    transaction_type=r["direction"],
+                    source="pdf_statement",
+                    row_number=idx + 1,
+                )
+                txns.append(tx.dict())
+            except Exception as e:
+                logger.warning(f"Skipping invalid row {idx + 1}: {e}")
+                continue
+        
+        pipeline.stage_transactions(txns, batch_id)
+        v = pipeline.validate_staged_transactions(batch_id)
+        
+        if v.get("valid", 0) > 0:
+            pipeline.categorize_staged_transactions(batch_id)
+            pipeline.load_to_production(batch_id)
+        
+        return len(txns), v.get("valid", 0), v.get("invalid", 0)
+    except Exception as e:
+        logger.exception(f"Error parsing PDF for batch {batch_id}")
         raise
     finally:
         session.close()
@@ -461,13 +647,7 @@ async def upload_xlsx_etl(
     path, size, mime = await save_upload_to_temp(file)
     kind = ensure_excel_mime(mime)  # "xlsx"|"xls"
     
-    if kind == "xls":
-        # Cleanup temp file before raising error
-        try:
-            os.remove(path)
-        except Exception:
-            pass
-        raise HTTPException(status_code=400, detail="Legacy .xls not supported. Please upload .xlsx.")
+    # Both .xlsx and .xls are supported - pandas.read_excel handles both
     
     # Create upload batch
     pipeline = ETLPipeline(user.user_id)
@@ -515,6 +695,64 @@ async def upload_xlsx_etl(
             pass
         logger.exception(f"Error processing Excel upload: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process Excel file: {str(e)}")
+
+
+@router.post("/upload/pdf", response_model=ETLResponse)
+async def upload_pdf_etl(
+    file: UploadFile = File(...),
+    bank_code: str = Form("GENERIC", description="Bank code: HDFC, ICICI, SBI, or GENERIC"),
+    password: Optional[str] = Form(None, description="Password for password-protected PDFs"),
+    user: UserDep = Depends(get_current_user)
+):
+    """
+    Upload PDF bank statement - Starts ETL pipeline with bank-specific parsing and rule-based categorization
+    
+    Process:
+    1. Extract: Parse PDF with bank-specific text extraction
+    2. Transform: Apply categorization rules from enrichment.txn_categorization_rule
+    3. Load: Stage, validate, and load to production tables
+    
+    Supports password-protected PDFs via password parameter.
+    """
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Please upload a PDF file")
+    
+    # Read file content
+    raw_bytes = await file.read()
+    
+    if len(raw_bytes) == 0:
+        raise HTTPException(status_code=400, detail="PDF file is empty")
+    
+    # Create upload batch
+    pipeline = ETLPipeline(user.user_id)
+    batch_id = pipeline.create_upload_batch(
+        upload_type='pdf',
+        file_name=file.filename,
+        file_size=len(raw_bytes)
+    )
+    
+    logger.info(f"PDF upload batch created: {batch_id} for user {user.user_id}, bank_code: {bank_code}, size: {len(raw_bytes)}")
+    
+    try:
+        records_staged, valid, invalid = _sync_parse_and_stage_pdf(
+            str(user.user_id),
+            str(batch_id),
+            file.filename or "upload.pdf",
+            raw_bytes,
+            bank_code,
+            password
+        )
+        
+        return ETLResponse(
+            message=f"Upload processed: {valid} valid, {invalid} invalid",
+            batch_id=str(batch_id),
+            records_staged=records_staged,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error processing PDF upload: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process PDF file: {str(e)}")
 
 
 @router.get("/batches/{batch_id}", response_model=BatchStatusResponse)
