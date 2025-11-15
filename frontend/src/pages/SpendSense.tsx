@@ -1256,6 +1256,21 @@ export default function SpendSense() {
                     <span className="hidden sm:inline">Import Bulk</span>
                   </button>
                 </Tooltip>
+                <Tooltip content="Import transactions from Gmail">
+                  <button
+                    onClick={() => {
+                      setShowGmailModal(true)
+                      loadGmailAccounts()
+                    }}
+                    className="px-3 sm:px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-all duration-200 hover:scale-105 active:scale-95 text-sm sm:text-base flex items-center gap-2 justify-center whitespace-nowrap shadow-md"
+                    title="Gmail Import"
+                  >
+                    <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                    <span className="hidden sm:inline">Gmail Import</span>
+                  </button>
+                </Tooltip>
                 <Tooltip content="Download Excel template for bulk import">
                   <button
                     onClick={handleDownloadTemplate}
