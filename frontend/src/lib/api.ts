@@ -2,14 +2,11 @@
  * API Client for Monytix Backend
  * Note: Using HTTPS with Cloudflare Tunnels - redirects are blocked to prevent CORS preflight failures
  */
-// @ts-expect-error - Vite env variables
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://backend.mallaapp.org'
 
 // Debug: Log the API URL being used (only in development)
-// @ts-expect-error - Vite env variables
 if (import.meta.env.DEV) {
   console.log('🔧 API Base URL:', API_BASE_URL)
-  // @ts-expect-error - Vite env variables
   console.log('🔧 VITE_API_URL env var:', import.meta.env.VITE_API_URL)
 }
 

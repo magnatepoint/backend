@@ -114,7 +114,6 @@ async function runGoalSimulation(
     throw new Error('No authentication token available')
   }
 
-  // @ts-expect-error - Vite env variables
   const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://backend.mallaapp.org'
   const res = await fetch(`${API_BASE_URL}/api/goalcoach/simulate`, {
     method: 'POST',
