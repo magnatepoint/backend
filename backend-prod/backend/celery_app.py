@@ -9,7 +9,8 @@ celery_app = Celery(
         "app.workers.pdf_worker",
         "app.workers.csv_worker",
         "app.workers.ml_worker",
-        "app.workers.etl_worker"
+        "app.workers.etl_worker",
+        "app.tasks.etl_tasks"  # New ETL tasks
     ]
 )
 
@@ -24,5 +25,9 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,  # Retry on startup
     broker_connection_retry=True,  # Enable connection retry
     broker_connection_max_retries=10,  # Max retries
+    task_routes={
+        "tasks.etl_tasks.parse_file_task": {"queue": "ingest"},
+        "tasks.etl_tasks.categorize_transactions_task": {"queue": "categorize"},
+    },
 )
 

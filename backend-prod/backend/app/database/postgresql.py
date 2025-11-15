@@ -35,9 +35,10 @@ AsyncSessionLocal = sessionmaker(
 
 
 def init_db():
-    """Initialize ALL database tables (production + staging + spendsense)"""
+    """Initialize ALL database tables (production + staging + spendsense + etl)"""
     from app.models.staging_models import Base as StagingBase
     from app.models.spendsense_models import Base as SpendSenseBase
+    from app.models.etl_models import Base as ETLBase
     
     # Initialize production tables
     Base.metadata.create_all(sync_engine)
@@ -50,6 +51,10 @@ def init_db():
     # Initialize SpendSense tables
     SpendSenseBase.metadata.create_all(sync_engine)
     print("✅ SpendSense tables initialized")
+    
+    # Initialize ETL tables
+    ETLBase.metadata.create_all(sync_engine)
+    print("✅ ETL tables initialized")
     
     print("✅ All database tables created successfully")
 

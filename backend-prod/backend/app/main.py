@@ -14,6 +14,7 @@ from config import settings
 from app.routers import transactions as transactions_router
 from app.routers import ml as ml_router
 from app.routers import auth as auth_router
+from app.routers import etl_router
 from app.core.websocket_manager import websocket_manager
 
 @asynccontextmanager

@@ -1,0 +1,126 @@
+"""
+Celery tasks for ETL pipeline
+"""
+from celery import shared_task
+from uuid import uuid4
+from app.services.parsers.detect_bank_and_parse import detect_bank_and_parse
+from app.services.categorizer_new import categorize_transaction, categorize_batch
+from app.models.etl_models import ETLBatch, StagedTransaction
+from app.database.postgresql import SessionLocal
+from sqlalchemy.orm import Session
+from typing import List, Dict, Any
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@shared_task(name="tasks.etl_tasks.parse_file_task", bind=True, max_retries=3)
+def parse_file_task(self, batch_id: str, file_path: str, ext: str, user_id: str):
+    """
+    Parse uploaded file and stage transactions.
+    
+    Args:
+        batch_id: ETL batch ID
+        file_path: Path to uploaded file
+        ext: File extension (.csv, .xlsx, .pdf)
+        user_id: User ID
+    """
+    session: Session = SessionLocal()
+    try:
+        batch = session.query(ETLBatch).filter_by(batch_id=batch_id).first()
+        if not batch:
+            logger.error(f"Batch {batch_id} not found")
+            return
+        
+        # Parse file
+        logger.info(f"Parsing file {file_path} for batch {batch_id}")
+        records = detect_bank_and_parse(file_path, ext)
+        
+        batch.total_records = len(records)
+        batch.valid_records = len(records)
+        batch.status = "parsed"
+        session.commit()
+        
+        # Stage transactions
+        for r in records:
+            tx = StagedTransaction(
+                id=str(uuid4()),
+                batch_id=batch_id,
+                user_id=user_id,
+                account_number_masked=r.get("account_number_masked"),
+                bank_code=r.get("bank_code"),
+                txn_date=r.get("txn_date"),
+                posted_date=r.get("posted_date"),
+                description=r.get("description"),
+                amount=r.get("amount"),
+                direction=r.get("direction"),
+                balance_after=r.get("balance_after"),
+                channel=r.get("channel"),
+                raw_meta=r.get("raw_meta"),
+            )
+            session.add(tx)
+        
+        session.commit()
+        logger.info(f"Staged {len(records)} transactions for batch {batch_id}")
+        
+        # Trigger categorization
+        categorize_transactions_task.delay(batch_id)
+        
+    except Exception as e:
+        logger.error(f"Error parsing file for batch {batch_id}: {e}", exc_info=True)
+        if batch:
+            batch.status = "failed"
+            batch.error_message = str(e)
+            session.commit()
+        raise
+    finally:
+        session.close()
+
+
+@shared_task(name="tasks.etl_tasks.categorize_transactions_task", bind=True, max_retries=3)
+def categorize_transactions_task(self, batch_id: str):
+    """
+    Categorize all transactions in a batch.
+    
+    Args:
+        batch_id: ETL batch ID
+    """
+    session: Session = SessionLocal()
+    try:
+        txns = session.query(StagedTransaction).filter_by(batch_id=batch_id).all()
+        
+        if not txns:
+            logger.warning(f"No transactions found for batch {batch_id}")
+            return
+        
+        logger.info(f"Categorizing {len(txns)} transactions for batch {batch_id}")
+        
+        for t in txns:
+            cat, sub, conf = categorize_transaction(
+                t.description or "",
+                float(t.amount or 0),
+                t.channel,
+                t.raw_meta
+            )
+            t.category = cat
+            t.subcategory = sub
+            t.category_confidence = conf
+        
+        batch = session.query(ETLBatch).filter_by(batch_id=batch_id).first()
+        if batch:
+            batch.status = "categorized"
+            batch.processed_records = len(txns)
+        
+        session.commit()
+        logger.info(f"Categorized {len(txns)} transactions for batch {batch_id}")
+        
+    except Exception as e:
+        logger.error(f"Error categorizing transactions for batch {batch_id}: {e}", exc_info=True)
+        if batch:
+            batch.status = "failed"
+            batch.error_message = str(e)
+            session.commit()
+        raise
+    finally:
+        session.close()
+
