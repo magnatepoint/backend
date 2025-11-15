@@ -283,6 +283,7 @@ app.include_router(categories_router.router, prefix="/api", tags=["Categories"])
 @app.options("/{full_path:path}")
 async def options_handler(request: Request, full_path: str):
     """Handle CORS preflight OPTIONS requests explicitly"""
+    import re
     origin = request.headers.get("origin", "")
     
     # Check if origin is in allowed list (case-insensitive check for safety)
@@ -291,9 +292,20 @@ async def options_handler(request: Request, full_path: str):
         # Normalize origin (remove trailing slash, lowercase comparison)
         origin_normalized = origin.rstrip("/")
         for allowed in allowed_origins:
+            # Exact match
             if allowed.rstrip("/").lower() == origin_normalized.lower():
                 cors_origin = origin
                 break
+            # Wildcard pattern match (e.g., *.monytix.ai)
+            if "*" in allowed:
+                pattern = allowed.replace(".", r"\.").replace("*", ".*")
+                if re.match(f"^{pattern}$", origin, re.IGNORECASE):
+                    cors_origin = origin
+                    break
+        
+        # Special case: if origin contains monytix.ai and no match found yet
+        if not cors_origin and "monytix.ai" in origin.lower():
+            cors_origin = origin
     
     # If no match found, use first allowed origin or "*" (but "*" doesn't work with credentials)
     if not cors_origin:
