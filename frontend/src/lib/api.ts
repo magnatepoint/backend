@@ -726,6 +726,80 @@ class ApiClient {
     return await response.json()
   }
 
+  async triggerGmailETL(gmailAccountId: string, mode: string = 'since_last', fromDate?: string, toDate?: string) {
+    const { supabase } = await import('./supabase')
+    const { data: { session } } = await supabase.auth.getSession()
+    const token = session?.access_token || localStorage.getItem('supabase_token')
+    
+    const response = await fetch(`${this.baseUrl}/api/etl/gmail/trigger`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token && { 'Authorization': `Bearer ${token}` }),
+      },
+      body: JSON.stringify({
+        gmail_account_id: gmailAccountId,
+        mode,
+        from_date: fromDate,
+        to_date: toDate,
+      })
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      let message = 'Gmail ETL failed'
+      try {
+        const error = JSON.parse(errorText)
+        message = error.message || error.detail || message
+      } catch {
+        message = errorText || message
+      }
+      throw new Error(message)
+    }
+
+    return await response.json()
+  }
+
+  async getGmailAccounts() {
+    const { supabase } = await import('./supabase')
+    const { data: { session } } = await supabase.auth.getSession()
+    const token = session?.access_token || localStorage.getItem('supabase_token')
+    
+    const response = await fetch(`${this.baseUrl}/api/etl/gmail/accounts`, {
+      method: 'GET',
+      headers: {
+        ...(token && { 'Authorization': `Bearer ${token}` }),
+      }
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(errorText || 'Failed to fetch Gmail accounts')
+    }
+
+    return await response.json()
+  }
+
+  async getETLBatchStatus(batchId: string) {
+    const { supabase } = await import('./supabase')
+    const { data: { session } } = await supabase.auth.getSession()
+    const token = session?.access_token || localStorage.getItem('supabase_token')
+    
+    const response = await fetch(`${this.baseUrl}/api/etl/batch/${batchId}`, {
+      method: 'GET',
+      headers: {
+        ...(token && { 'Authorization': `Bearer ${token}` }),
+      }
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(errorText || 'Failed to fetch batch status')
+    }
+
+    return await response.json()
+  }
+
   async uploadPDFETL(file: File, bankCode: string = 'GENERIC', password?: string) {
     const formData = new FormData()
     formData.append('file', file)

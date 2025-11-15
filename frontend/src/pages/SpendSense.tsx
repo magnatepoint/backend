@@ -714,6 +714,76 @@ export default function SpendSense() {
     }
   }
 
+  const loadGmailAccounts = async () => {
+    try {
+      const accounts = await apiClient.getGmailAccounts()
+      setGmailAccounts(accounts || [])
+      if (accounts && accounts.length > 0 && !selectedGmailAccount) {
+        setSelectedGmailAccount(accounts[0].id)
+      }
+    } catch (err: any) {
+      console.error('Failed to load Gmail accounts:', err)
+      showToast(err.message || 'Failed to load Gmail accounts', 'error')
+    }
+  }
+
+  const handleGmailETL = async () => {
+    if (!selectedGmailAccount) {
+      showToast('Please select a Gmail account', 'warning')
+      return
+    }
+
+    setGmailETLStatus({ loading: true })
+    try {
+      const result = await apiClient.triggerGmailETL(
+        selectedGmailAccount,
+        gmailETLMode,
+        gmailETLFromDate || undefined,
+        gmailETLToDate || undefined
+      )
+      
+      setGmailETLStatus({ batchId: result.batch_id, status: result.status, loading: false })
+      showToast(`Gmail ETL started! Batch ID: ${result.batch_id}`, 'success')
+      
+      // Poll for status
+      if (result.batch_id) {
+        pollBatchStatus(result.batch_id)
+      }
+    } catch (err: any) {
+      console.error('Failed to trigger Gmail ETL:', err)
+      showToast(err.message || 'Failed to trigger Gmail ETL', 'error')
+      setGmailETLStatus({ loading: false })
+    }
+  }
+
+  const pollBatchStatus = async (batchId: string) => {
+    const maxAttempts = 30
+    let attempts = 0
+    
+    const interval = setInterval(async () => {
+      attempts++
+      try {
+        const status = await apiClient.getETLBatchStatus(batchId)
+        setGmailETLStatus({ batchId, status: status.status, loading: false })
+        
+        if (status.status === 'categorized' || status.status === 'failed' || attempts >= maxAttempts) {
+          clearInterval(interval)
+          if (status.status === 'categorized') {
+            showToast(`Gmail ETL completed! Processed ${status.processed || 0} transactions.`, 'success')
+            loadData() // Reload transactions
+          } else if (status.status === 'failed') {
+            showToast(`Gmail ETL failed: ${status.error_message || 'Unknown error'}`, 'error')
+          }
+        }
+      } catch (err) {
+        console.error('Failed to poll batch status:', err)
+        if (attempts >= maxAttempts) {
+          clearInterval(interval)
+        }
+      }
+    }, 2000) // Poll every 2 seconds
+  }
+
   const handleDownloadTemplate = async () => {
     try {
       const blob = await apiClient.downloadTransactionTemplate()
