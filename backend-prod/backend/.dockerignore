@@ -22,8 +22,8 @@ ENV/
 *.swo
 *~
 
-# Environment files
-.env
+# Environment files (but we need .env in Docker, so don't ignore it)
+# .env
 .env.local
 .env.*.local
 .env.bak

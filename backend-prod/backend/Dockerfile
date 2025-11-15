@@ -6,8 +6,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR ${APP_HOME}
 
+# Install system dependencies including Redis
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential gcc libpq-dev libmagic1 libmagic-dev \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+        libpq-dev \
+        libmagic1 \
+        libmagic-dev \
+        redis-server \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./requirements.txt
@@ -17,7 +24,11 @@ RUN pip install --upgrade pip \
 
 COPY . .
 
+# Make entrypoint script executable
+RUN chmod +x docker-entrypoint.sh
+
 EXPOSE 7000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7000"]
+# Use entrypoint script to start Redis, Celery, and FastAPI
+CMD ["./docker-entrypoint.sh"]
 
