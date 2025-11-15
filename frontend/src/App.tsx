@@ -9,7 +9,9 @@ import SpendSense from './pages/SpendSense'
 import BudgetPilot from './pages/BudgetPilot'
 import GoalCompass from './pages/GoalCompass'
 import MoneyMoments from './pages/MoneyMoments'
+import Settings from './pages/Settings'
 import Callback from './pages/Callback'
+import GmailCallback from './pages/GmailCallback'
 import './App.css'
 
 function App() {
@@ -19,6 +21,7 @@ function App() {
         <ToastProvider>
           <Routes>
             <Route path="/callback" element={<Callback />} />
+            <Route path="/gmail/callback" element={<GmailCallback />} />
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<Layout />}>
               <Route index element={<Console />} />
@@ -26,6 +29,7 @@ function App() {
               <Route path="budgetpilot" element={<BudgetPilot />} />
               <Route path="goalcompass" element={<GoalCompass />} />
               <Route path="moneymoments" element={<MoneyMoments />} />
+              <Route path="settings" element={<Settings />} />
             </Route>
           </Routes>
         </ToastProvider>

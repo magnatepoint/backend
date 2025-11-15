@@ -59,6 +59,7 @@ export default function Layout() {
     { path: '/budgetpilot', label: 'BudgetPilot', icon: 'B' },
     { path: '/moneymoments', label: 'MoneyMoments', icon: 'M' },
     { path: '/goalcompass', label: 'GoalCompass', icon: 'G' },
+    { path: '/settings', label: 'Settings', icon: '⚙' },
   ]
 
   return (
