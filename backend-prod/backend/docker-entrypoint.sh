@@ -1,6 +1,11 @@
 #!/bin/bash
 # Don't use set -e, handle errors manually to ensure all services start
 
+# Log that entrypoint script is running
+echo "=========================================="
+echo "🚀 Docker Entrypoint Script Starting..."
+echo "=========================================="
+
 # Function to cleanup on exit
 cleanup() {
     echo "🛑 Shutting down services..."
