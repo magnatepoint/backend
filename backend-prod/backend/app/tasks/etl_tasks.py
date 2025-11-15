@@ -14,7 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-@shared_task(name="tasks.etl_tasks.parse_file_task", bind=True, max_retries=3)
+@shared_task(name="app.tasks.etl_tasks.parse_file_task", bind=True, max_retries=3)
 def parse_file_task(self, batch_id: str, file_path: str, ext: str, user_id: str):
     """
     Parse uploaded file and stage transactions.
