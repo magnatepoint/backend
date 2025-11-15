@@ -15,6 +15,7 @@ RUN apt-get update \
         libmagic1 \
         libmagic-dev \
         redis-server \
+        procps \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./requirements.txt

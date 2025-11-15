@@ -19,23 +19,42 @@ trap cleanup SIGINT SIGTERM EXIT
 
 # Start Redis
 echo "🔴 Starting Redis..."
-redis-server --daemonize yes --protected-mode no
-REDIS_PID=$(pgrep -f "redis-server")
-sleep 1
+# Create Redis config to disable protected mode and bind to all interfaces
+mkdir -p /etc/redis
+cat > /etc/redis/redis.conf <<EOF
+bind 0.0.0.0
+protected-mode no
+port 6379
+daemonize yes
+EOF
 
-# Verify Redis is running
-if redis-cli ping > /dev/null 2>&1; then
-    echo "✅ Redis started successfully (PID: $REDIS_PID)"
-else
-    echo "❌ Failed to start Redis"
-    exit 1
-fi
+# Start Redis with config
+redis-server /etc/redis/redis.conf
+REDIS_PID=$(pgrep -f "redis-server" | head -1)
+
+# Wait for Redis to be ready (with retries)
+echo "⏳ Waiting for Redis to be ready..."
+for i in {1..10}; do
+    if redis-cli ping > /dev/null 2>&1; then
+        echo "✅ Redis started successfully (PID: $REDIS_PID)"
+        break
+    fi
+    if [ $i -eq 10 ]; then
+        echo "❌ Failed to start Redis after 10 attempts"
+        exit 1
+    fi
+    sleep 1
+done
+
+# Verify Redis is accessible
+redis-cli ping
+echo "✅ Redis is ready and responding"
 
 # Start Celery Worker in background
 echo "🌿 Starting Celery worker..."
 celery -A celery_app worker --loglevel=info --concurrency=4 &
 CELERY_PID=$!
-sleep 2
+sleep 3
 
 # Check if Celery started
 if ps -p $CELERY_PID > /dev/null; then
