@@ -133,14 +133,23 @@ app.add_middleware(ProxyFixMiddleware)
 # Allow origins from environment or default to localhost for development
 # Production: Set CORS_ORIGINS env var with comma-separated list like:
 # CORS_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:55860,https://mallaapp.org,https://app.mallaapp.org
-default_origins = "http://localhost:5173,http://localhost:3000,http://localhost:55860,https://mallaapp.org,https://app.mallaapp.org,https://frontend.mallaapp.org,https://backend.mallaapp.org,http://backend.mallaapp.org,https://mvp.monytix.ai,http://mvp.monytix.ai,https://f50d8254.monytix.pages.dev"
+default_origins = "http://localhost:5173,http://localhost:3000,http://localhost:55860,https://mallaapp.org,https://app.mallaapp.org,https://frontend.mallaapp.org,https://backend.mallaapp.org,http://backend.mallaapp.org,https://mvp.monytix.ai,http://mvp.monytix.ai,https://f50d8254.monytix.pages.dev,https://*.monytix.ai"
 # Clean up origins: remove duplicates, trim whitespace, filter empty strings
 raw_origins = os.getenv("CORS_ORIGINS", default_origins).split(",")
 allowed_origins = list(set([origin.strip() for origin in raw_origins if origin.strip()]))
 
+# Filter out wildcard patterns from allowed_origins for CORSMiddleware
+# (CORSMiddleware doesn't support wildcards, we handle them in OPTIONS handler)
+cors_origins_for_middleware = [origin for origin in allowed_origins if "*" not in origin]
+# Add explicit monytix.ai origins
+if "https://mvp.monytix.ai" not in cors_origins_for_middleware:
+    cors_origins_for_middleware.append("https://mvp.monytix.ai")
+if "http://mvp.monytix.ai" not in cors_origins_for_middleware:
+    cors_origins_for_middleware.append("http://mvp.monytix.ai")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=cors_origins_for_middleware,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
