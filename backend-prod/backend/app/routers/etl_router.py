@@ -11,6 +11,7 @@ from celery_app import celery_app
 from app.models.etl_models import ETLBatch
 from app.database.postgresql import SessionLocal
 from app.routers.auth import get_current_user, UserDep
+from typing import List, Dict, Any
 
 router = APIRouter(prefix="/api/etl", tags=["ETL"])
 
@@ -56,7 +57,7 @@ async def etl_upload_file(
         # Dispatch to Celery task
         try:
             celery_app.send_task(
-                "tasks.etl_tasks.parse_file_task",
+                "app.tasks.etl_tasks.parse_file_task",
                 args=[batch_id, file_path, ext, user.user_id],
                 queue="ingest",
             )

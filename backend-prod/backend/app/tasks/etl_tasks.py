@@ -77,7 +77,7 @@ def parse_file_task(self, batch_id: str, file_path: str, ext: str, user_id: str)
         session.close()
 
 
-@shared_task(name="tasks.etl_tasks.categorize_transactions_task", bind=True, max_retries=3)
+@shared_task(name="app.tasks.etl_tasks.categorize_transactions_task", bind=True, max_retries=3)
 def categorize_transactions_task(self, batch_id: str):
     """
     Categorize all transactions in a batch.
