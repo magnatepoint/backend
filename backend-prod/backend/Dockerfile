@@ -31,5 +31,6 @@ RUN chmod +x docker-entrypoint.sh
 EXPOSE 7000
 
 # Use entrypoint script to start Redis, Celery, and FastAPI
-CMD ["./docker-entrypoint.sh"]
+# Use ENTRYPOINT to ensure script runs, CMD for arguments
+ENTRYPOINT ["./docker-entrypoint.sh"]
 

@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Enable verbose output for debugging
+set -x
+
 # Function to cleanup on exit
 cleanup() {
     echo "🛑 Shutting down services..."
@@ -39,25 +42,38 @@ EOF
     mkdir -p /var/run/redis /var/log/redis
     chmod 755 /var/run/redis /var/log/redis
     
-    # Start Redis with config
+    # Start Redis with config (in foreground first to check for errors)
     echo "🚀 Launching Redis server..."
-    redis-server /etc/redis/redis.conf
+    redis-server /etc/redis/redis.conf 2>&1 &
+    REDIS_START_PID=$!
+    
+    # Wait a moment for Redis to start
+    sleep 2
     
     # Wait for Redis to be ready (with retries)
     echo "⏳ Waiting for Redis to be ready..."
     REDIS_PID=""
     for i in {1..15}; do
         REDIS_PID=$(pgrep -f "redis-server" | head -1)
-        if [ ! -z "$REDIS_PID" ] && redis-cli ping > /dev/null 2>&1; then
-            echo "✅ Redis started successfully (PID: $REDIS_PID)"
-            break
+        if [ ! -z "$REDIS_PID" ]; then
+            # Try to ping Redis
+            if redis-cli -h localhost ping > /dev/null 2>&1; then
+                echo "✅ Redis started successfully (PID: $REDIS_PID)"
+                break
+            fi
         fi
         if [ $i -eq 15 ]; then
             echo "❌ Failed to start Redis after 15 attempts"
+            echo "Checking if Redis process exists..."
+            ps aux | grep redis || echo "No Redis process found"
             echo "Checking Redis logs..."
             tail -20 /var/log/redis/redis-server.log 2>/dev/null || echo "No Redis logs found"
+            echo "Trying to start Redis in foreground to see errors..."
+            redis-server /etc/redis/redis.conf --daemonize no &
+            sleep 2
             exit 1
         fi
+        echo "  Attempt $i/15: Redis not ready yet, waiting..."
         sleep 1
     done
 fi
