@@ -2,16 +2,16 @@
 New ETL Router - Clean pipeline structure
 """
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from pydantic import BaseModel
 from uuid import uuid4
 import os
 import tempfile
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from celery_app import celery_app
-from app.models.etl_models import ETLBatch
+from app.models.etl_models import ETLBatch, GmailAccount
 from app.database.postgresql import SessionLocal
 from app.routers.auth import get_current_user, UserDep
-from typing import List, Dict, Any
 
 router = APIRouter(prefix="/api/etl", tags=["ETL"])
 
@@ -163,6 +163,73 @@ async def get_batch_transactions(
             ],
             "total": batch.total_records,
         }
+    finally:
+        session.close()
+
+
+# Gmail ETL Models
+class GmailTriggerIn(BaseModel):
+    gmail_account_id: str
+    mode: str = "since_last"  # "since_last" | "full" | "date_range"
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+
+
+@router.post("/gmail/trigger")
+async def trigger_gmail_etl(
+    body: GmailTriggerIn,
+    user: UserDep = Depends(get_current_user),
+):
+    """
+    Trigger Gmail ETL for a connected Gmail account.
+    
+    Fetches emails and extracts transactions, loans, OTT subscriptions.
+    """
+    session = SessionLocal()
+    try:
+        gmail_acc = (
+            session.query(GmailAccount)
+            .filter_by(id=body.gmail_account_id, user_id=user.user_id, is_active=True)
+            .first()
+        )
+        if not gmail_acc:
+            raise HTTPException(status_code=404, detail="Gmail account not found or inactive")
+
+        batch_id = str(uuid4())
+
+        batch = ETLBatch(
+            batch_id=batch_id,
+            user_id=user.user_id,
+            source="gmail",
+            status="pending",
+        )
+
+        session.add(batch)
+        session.commit()
+
+        # Dispatch to Celery task
+        try:
+            celery_app.send_task(
+                "app.tasks.etl_tasks.parse_gmail_task",
+                args=[batch_id, gmail_acc.id, user.user_id],
+                queue="ingest",
+            )
+        except Exception as e:
+            # Fallback to sync processing if Celery unavailable
+            from app.tasks.etl_tasks import parse_gmail_task
+            parse_gmail_task(batch_id, gmail_acc.id, user.user_id)
+
+        return {
+            "message": "Gmail ETL started",
+            "batch_id": batch_id,
+            "status": "pending",
+            "gmail_account": gmail_acc.email
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to start Gmail ETL: {str(e)}")
     finally:
         session.close()
 

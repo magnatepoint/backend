@@ -4,11 +4,12 @@ Celery tasks for ETL pipeline
 from celery import shared_task
 from uuid import uuid4
 from app.services.parsers.detect_bank_and_parse import detect_bank_and_parse
+from app.services.parsers.gmail_parser import gmail_messages_to_staged_transactions
 from app.services.categorizer_new import categorize_transaction, categorize_batch
-from app.models.etl_models import ETLBatch, StagedTransaction
+from app.models.etl_models import ETLBatch, StagedTransaction, EmailMessageMeta, GmailAccount
 from app.database.postgresql import SessionLocal
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
