@@ -68,7 +68,12 @@ export default function Login() {
 
     try {
       // @ts-expect-error - Vite env variables
+      // Use environment variable if set, otherwise use current origin
+      // In production, set VITE_OAUTH_REDIRECT_URL to your production URL
       const redirectUrl = import.meta.env.VITE_OAUTH_REDIRECT_URL || `${window.location.origin}/callback`
+      
+      console.log('🔐 OAuth redirect URL:', redirectUrl)
+      
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
