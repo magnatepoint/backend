@@ -211,6 +211,8 @@ from app.routers import goalcompass as goalcompass_router
 from app.routers import goalcoach as goalcoach_router
 from app.routers import moneymoments as moneymoments_router
 from app.routers import categories as categories_router
+from app.routers import gmail_oauth as gmail_oauth_router
+from app.routers import admin as admin_router
 
 # Include routers
 app.include_router(auth_router.router, prefix="/auth", tags=["Authentication"])
@@ -277,6 +279,8 @@ app.include_router(goalcompass_router.router, prefix="/api/goalcompass", tags=["
 app.include_router(goalcoach_router.router, prefix="/api/goalcoach", tags=["GoalCoach"])
 app.include_router(moneymoments_router.router, prefix="/api/moneymoments", tags=["MoneyMoments"])
 app.include_router(categories_router.router, prefix="/api", tags=["Categories"])
+app.include_router(gmail_oauth_router.router, tags=["Gmail OAuth"])
+app.include_router(admin_router.router, tags=["Admin"])
 
 
 # Explicit OPTIONS handler for CORS preflight (backup to middleware)

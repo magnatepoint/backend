@@ -57,9 +57,17 @@ class GmailAccount(Base):
     id = Column(String, primary_key=True)
     user_id = Column(String, nullable=False, index=True)
     email = Column(String, nullable=False)
-    # e.g. reference to your OAuth credential storage
+    display_name = Column(String, nullable=True)
+
+    # OAuth credentials
+    access_token = Column(Text, nullable=True)
+    refresh_token = Column(Text, nullable=True)
+    token_expires_at = Column(DateTime, nullable=True)
+
+    # Legacy field for reference
     credentials_id = Column(String, nullable=True)
     last_history_id = Column(String, nullable=True)  # for incremental sync
+    last_sync_at = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

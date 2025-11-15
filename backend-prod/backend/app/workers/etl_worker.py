@@ -117,13 +117,13 @@ def process_pdf_etl(
             temp_path = tmp.name
         
         logger.info(f"Processing PDF ETL: batch={batch_id}, bank={bank_code}, file={file_name}")
-        
+
         # Process PDF file
         records_staged, valid, invalid = _sync_parse_and_stage_pdf(
             user_id=user_id,
             batch_id=batch_id,
             file_name=file_name,
-            path=temp_path,
+            file_or_bytes=temp_path,
             bank_code=bank_code,
             password=password
         )
