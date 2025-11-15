@@ -1,8 +1,8 @@
 # ✅ Build Errors Fixed - Deployment Ready!
 
-## 🐛 Issues Found
+## 🐛 Issues Found & Fixed
 
-During Cloudflare Pages deployment, the build failed with TypeScript errors:
+During Cloudflare Pages deployment, the build failed with TypeScript errors (fixed in 2 commits):
 
 ### Error 1: Wrong Import Paths
 ```
@@ -27,6 +27,19 @@ TS2339: Property 'env' does not exist on type 'ImportMeta'
 **Files Affected:**
 - `src/components/GmailConnect.tsx` (lines 27, 59, 86, 113)
 - `src/pages/GmailCallback.tsx` (line 63)
+
+### Error 3: Unused @ts-expect-error Directives
+```
+TS2578: Unused '@ts-expect-error' directive
+```
+
+**Cause:** After adding proper type definitions, the `@ts-expect-error` directives became unnecessary
+
+**Files Affected:**
+- `src/lib/api.ts` (3 instances)
+- `src/lib/supabase.ts` (2 instances)
+- `src/pages/GoalCompass.tsx` (1 instance)
+- `src/pages/Login.tsx` (1 instance)
 
 ---
 
@@ -54,6 +67,10 @@ interface ImportMetaEnv {
   readonly VITE_API_URL: string
   readonly VITE_SUPABASE_URL: string
   readonly VITE_SUPABASE_ANON_KEY: string
+  readonly VITE_OAUTH_REDIRECT_URL?: string
+  readonly DEV: boolean
+  readonly PROD: boolean
+  readonly MODE: string
 }
 
 interface ImportMeta {
@@ -65,30 +82,64 @@ This defines the types for:
 - `import.meta.env.VITE_API_URL`
 - `import.meta.env.VITE_SUPABASE_URL`
 - `import.meta.env.VITE_SUPABASE_ANON_KEY`
+- `import.meta.env.VITE_OAUTH_REDIRECT_URL`
+- `import.meta.env.DEV`
+- `import.meta.env.PROD`
+- `import.meta.env.MODE`
+
+### Fix 3: Removed Unused @ts-expect-error Directives
+Removed all `@ts-expect-error` comments that were suppressing type errors:
+```typescript
+// Before:
+// @ts-expect-error - Vite env variables
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://backend.mallaapp.org'
+
+// After:
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://backend.mallaapp.org'
+```
+
+Now TypeScript properly validates all environment variable usage!
 
 ---
 
 ## 📁 Files Modified
 
+### Commit 1: ed7614b1 (Fix import paths)
 1. ✅ `src/components/GmailConnect.tsx` - Fixed imports
 2. ✅ `src/pages/GmailCallback.tsx` - Fixed imports
 3. ✅ `src/pages/Settings.tsx` - Fixed imports
 4. ✅ `src/vite-env.d.ts` - **NEW** - Environment variable types
 
+### Commit 2: 16d88961 (Remove @ts-expect-error)
+5. ✅ `src/lib/api.ts` - Removed 3 @ts-expect-error directives
+6. ✅ `src/lib/supabase.ts` - Removed 2 @ts-expect-error directives
+7. ✅ `src/pages/GoalCompass.tsx` - Removed 1 @ts-expect-error directive
+8. ✅ `src/pages/Login.tsx` - Removed 1 @ts-expect-error directive
+9. ✅ `src/vite-env.d.ts` - Added complete env var types
+
 ---
 
-## 🚀 Git Commit
+## 🚀 Git Commits
 
+### Commit 1: ed7614b1
 ```
-Commit: ed7614b1
 Message: "Fix: TypeScript build errors"
 Status: Pushed to origin/main
+Changes: 4 files (3 modified, 1 created)
 ```
 
-**Changes:**
-- 3 files modified (import paths)
+### Commit 2: 16d88961
+```
+Message: "Fix: Remove unused @ts-expect-error directives"
+Status: Pushed to origin/main
+Changes: 6 files (5 modified, 1 created)
+```
+
+**Total Changes:**
+- 9 files modified
 - 1 file created (vite-env.d.ts)
-- 17 insertions, 5 deletions
+- 1 file created (BUILD_FIX_COMPLETE.md)
+- 197 insertions, 12 deletions
 
 ---
 
@@ -126,12 +177,17 @@ Cloudflare Pages will now:
 
 ## 📊 Summary
 
-### Before
-- ❌ 10 TypeScript errors
+### Build 1 (Before Fixes)
+- ❌ 10 TypeScript errors (TS2307, TS2339)
 - ❌ Build failed
 - ❌ Deployment blocked
 
-### After
+### Build 2 (After First Fix)
+- ❌ 7 TypeScript errors (TS2578)
+- ❌ Build failed
+- ❌ Deployment blocked
+
+### Build 3 (After Second Fix)
 - ✅ 0 TypeScript errors
 - ✅ Build succeeds
 - ✅ Deployment ready
