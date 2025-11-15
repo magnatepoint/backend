@@ -1904,6 +1904,126 @@ export default function SpendSense() {
           </div>
         )}
 
+        {/* Gmail Import Modal */}
+        {showGmailModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 sm:p-6">
+            <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+              <h2 className="text-xl sm:text-2xl font-bold mb-4 sm:mb-6 text-green-400">Import from Gmail</h2>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Gmail Account</label>
+                  {gmailAccounts.length === 0 ? (
+                    <div className="bg-yellow-900/20 border border-yellow-500 rounded-lg p-4">
+                      <p className="text-sm text-yellow-300">
+                        No Gmail accounts connected. Please connect your Gmail account first.
+                      </p>
+                    </div>
+                  ) : (
+                    <select
+                      value={selectedGmailAccount}
+                      onChange={(e) => setSelectedGmailAccount(e.target.value)}
+                      className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-green-500"
+                    >
+                      {gmailAccounts.map((acc) => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.email} {acc.is_active ? '' : '(Inactive)'}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Import Mode</label>
+                  <select
+                    value={gmailETLMode}
+                    onChange={(e) => setGmailETLMode(e.target.value)}
+                    className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-green-500"
+                  >
+                    <option value="since_last">Since Last Sync</option>
+                    <option value="full">Full Sync</option>
+                    <option value="date_range">Date Range</option>
+                  </select>
+                </div>
+
+                {gmailETLMode === 'date_range' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">From Date</label>
+                      <input
+                        type="date"
+                        value={gmailETLFromDate}
+                        onChange={(e) => setGmailETLFromDate(e.target.value)}
+                        className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-green-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">To Date</label>
+                      <input
+                        type="date"
+                        value={gmailETLToDate}
+                        onChange={(e) => setGmailETLToDate(e.target.value)}
+                        className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-green-500"
+                      />
+                    </div>
+                  </>
+                )}
+
+                {gmailETLStatus.batchId && (
+                  <div className="bg-green-900/20 border border-green-500 rounded-lg p-4">
+                    <p className="text-sm text-green-300">
+                      <strong>Batch ID:</strong> {gmailETLStatus.batchId}
+                      <br />
+                      <strong>Status:</strong> {gmailETLStatus.status || 'Processing...'}
+                    </p>
+                  </div>
+                )}
+
+                <div className="bg-green-900/20 border border-green-500 rounded-lg p-4">
+                  <p className="text-sm text-green-300">
+                    <strong>Gmail Import:</strong> Automatically extracts transactions, loans, EMI payments, credit card bills, and OTT subscriptions from your Gmail. 
+                    Transactions are auto-categorized and ready to view in Recent Transactions.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 mt-6">
+                <button
+                  onClick={handleGmailETL}
+                  disabled={!selectedGmailAccount || gmailAccounts.length === 0 || gmailETLStatus.loading}
+                  className="flex-1 px-4 py-2.5 bg-green-500 hover:bg-green-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition-colors text-sm sm:text-base flex items-center justify-center gap-2"
+                >
+                  {gmailETLStatus.loading ? (
+                    <>
+                      <svg className="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Processing...
+                    </>
+                  ) : (
+                    'Start Gmail Import'
+                  )}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowGmailModal(false)
+                    setSelectedGmailAccount('')
+                    setGmailETLMode('since_last')
+                    setGmailETLFromDate('')
+                    setGmailETLToDate('')
+                    setGmailETLStatus({ loading: false })
+                  }}
+                  disabled={gmailETLStatus.loading}
+                  className="flex-1 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition-colors text-sm sm:text-base"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Category Drilldown Modal */}
         {drilldownCategory && (
           <CategoryDrilldownModal
