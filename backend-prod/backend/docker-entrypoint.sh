@@ -19,36 +19,56 @@ trap cleanup SIGINT SIGTERM EXIT
 
 # Start Redis
 echo "🔴 Starting Redis..."
-# Create Redis config to disable protected mode and bind to all interfaces
-mkdir -p /etc/redis
-cat > /etc/redis/redis.conf <<EOF
+# Check if Redis is already running
+if redis-cli ping > /dev/null 2>&1; then
+    echo "✅ Redis is already running"
+    REDIS_PID=$(pgrep -f "redis-server" | head -1)
+else
+    # Create Redis config to disable protected mode and bind to all interfaces
+    mkdir -p /etc/redis
+    cat > /etc/redis/redis.conf <<EOF
 bind 0.0.0.0
 protected-mode no
 port 6379
 daemonize yes
+pidfile /var/run/redis/redis-server.pid
+logfile /var/log/redis/redis-server.log
 EOF
+    
+    # Create necessary directories
+    mkdir -p /var/run/redis /var/log/redis
+    chmod 755 /var/run/redis /var/log/redis
+    
+    # Start Redis with config
+    echo "🚀 Launching Redis server..."
+    redis-server /etc/redis/redis.conf
+    
+    # Wait for Redis to be ready (with retries)
+    echo "⏳ Waiting for Redis to be ready..."
+    REDIS_PID=""
+    for i in {1..15}; do
+        REDIS_PID=$(pgrep -f "redis-server" | head -1)
+        if [ ! -z "$REDIS_PID" ] && redis-cli ping > /dev/null 2>&1; then
+            echo "✅ Redis started successfully (PID: $REDIS_PID)"
+            break
+        fi
+        if [ $i -eq 15 ]; then
+            echo "❌ Failed to start Redis after 15 attempts"
+            echo "Checking Redis logs..."
+            tail -20 /var/log/redis/redis-server.log 2>/dev/null || echo "No Redis logs found"
+            exit 1
+        fi
+        sleep 1
+    done
+fi
 
-# Start Redis with config
-redis-server /etc/redis/redis.conf
-REDIS_PID=$(pgrep -f "redis-server" | head -1)
-
-# Wait for Redis to be ready (with retries)
-echo "⏳ Waiting for Redis to be ready..."
-for i in {1..10}; do
-    if redis-cli ping > /dev/null 2>&1; then
-        echo "✅ Redis started successfully (PID: $REDIS_PID)"
-        break
-    fi
-    if [ $i -eq 10 ]; then
-        echo "❌ Failed to start Redis after 10 attempts"
-        exit 1
-    fi
-    sleep 1
-done
-
-# Verify Redis is accessible
-redis-cli ping
-echo "✅ Redis is ready and responding"
+# Final verification
+if redis-cli ping > /dev/null 2>&1; then
+    echo "✅ Redis is ready and responding to ping"
+else
+    echo "❌ Redis is not responding"
+    exit 1
+fi
 
 # Start Celery Worker in background
 echo "🌿 Starting Celery worker..."
