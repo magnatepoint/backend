@@ -27,6 +27,7 @@ celery_app.conf.update(
     broker_connection_max_retries=10,  # Max retries
     task_routes={
         "app.tasks.etl_tasks.parse_file_task": {"queue": "ingest"},
+        "app.tasks.etl_tasks.parse_gmail_task": {"queue": "ingest"},
         "app.tasks.etl_tasks.categorize_transactions_task": {"queue": "categorize"},
     },
 )

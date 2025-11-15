@@ -49,3 +49,37 @@ class StagedTransaction(Base):
     raw_meta = Column(JSON)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
+# Optional: track Gmail ETL source accounts
+class GmailAccount(Base):
+    __tablename__ = "gmail_account"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False, index=True)
+    email = Column(String, nullable=False)
+    # e.g. reference to your OAuth credential storage
+    credentials_id = Column(String, nullable=True)
+    last_history_id = Column(String, nullable=True)  # for incremental sync
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class EmailMessageMeta(Base):
+    __tablename__ = "email_message_meta"
+
+    id = Column(String, primary_key=True)
+    batch_id = Column(String, nullable=False, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    gmail_account_id = Column(String, nullable=False, index=True)
+    message_id = Column(String, nullable=False, index=True)  # Gmail message ID
+    thread_id = Column(String, nullable=True)
+    subject = Column(Text)
+    from_addr = Column(String)
+    to_addr = Column(String)
+    sent_at = Column(DateTime, nullable=True)
+    raw_headers = Column(JSON, nullable=True)
+    raw_snippet = Column(Text, nullable=True)
+    parsed = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+

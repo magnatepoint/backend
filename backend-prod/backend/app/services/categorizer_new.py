@@ -9,8 +9,15 @@ from typing import Tuple, List, Dict, Any
 KEYWORD_MAP = {
     "swiggy": ("FOOD_AND_DINING", "ONLINE_FOOD"),
     "zomato": ("FOOD_AND_DINING", "ONLINE_FOOD"),
-    "netflix": ("ENTERTAINMENT", "OTT"),
-    "hotstar": ("ENTERTAINMENT", "OTT"),
+    "netflix": ("ENTERTAINMENT", "OTT_SUBSCRIPTION"),
+    "hotstar": ("ENTERTAINMENT", "OTT_SUBSCRIPTION"),
+    "disney+ hotstar": ("ENTERTAINMENT", "OTT_SUBSCRIPTION"),
+    "prime video": ("ENTERTAINMENT", "OTT_SUBSCRIPTION"),
+    "sonyliv": ("ENTERTAINMENT", "OTT_SUBSCRIPTION"),
+    "zee5": ("ENTERTAINMENT", "OTT_SUBSCRIPTION"),
+    "aha": ("ENTERTAINMENT", "OTT_SUBSCRIPTION"),
+    "spotify": ("ENTERTAINMENT", "MUSIC_STREAMING"),
+    "youtube premium": ("ENTERTAINMENT", "OTT_SUBSCRIPTION"),
     "irctc": ("TRAVEL", "TRAIN"),
     "petrol": ("TRANSPORT", "FUEL"),
     "upi": ("TRANSFER", "UPI_PAYMENT"),
@@ -18,6 +25,10 @@ KEYWORD_MAP = {
     "flipkart": ("SHOPPING", "ONLINE_SHOPPING"),
     "salary": ("INCOME", "SALARY"),
     "emi": ("LOAN_EMI", "GENERIC_LOAN"),
+    "loan a/c": ("LOAN_EMI", "GENERIC_LOAN"),
+    "loan account": ("LOAN_EMI", "GENERIC_LOAN"),
+    "credit card payment": ("DEBT", "CREDIT_CARD_PAYMENT"),
+    "credit card": ("DEBT", "CREDIT_CARD_PAYMENT"),
 }
 
 
@@ -37,6 +48,10 @@ def categorize_transaction(description: str, amount: float, channel: str = None,
     # Check for EMI patterns
     if "emi" in desc or "due" in desc or "installment" in desc:
         return "LOAN_EMI", "GENERIC_LOAN", 0.8
+    
+    # Check for OTT subscriptions
+    if any(x in desc for x in ["netflix", "hotstar", "prime video", "sonyliv", "zee5", "aha", "spotify", "youtube premium"]):
+        return "ENTERTAINMENT", "OTT_SUBSCRIPTION", 0.85
     
     # Check for salary/income
     if any(x in desc for x in ["salary", "income", "credit"]):
