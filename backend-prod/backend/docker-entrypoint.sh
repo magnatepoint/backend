@@ -1,8 +1,5 @@
 #!/bin/bash
-set -e
-
-# Enable verbose output for debugging
-set -x
+# Don't use set -e, handle errors manually to ensure all services start
 
 # Function to cleanup on exit
 cleanup() {
