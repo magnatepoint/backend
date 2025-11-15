@@ -201,6 +201,13 @@ export default function SpendSense() {
   const [importPassword, setImportPassword] = useState<string>('')
   const [importErrors, setImportErrors] = useState<Array<{ row: number; field: string | null; message: string }>>([])
   const [importing, setImporting] = useState(false)
+  const [showGmailModal, setShowGmailModal] = useState(false)
+  const [gmailAccounts, setGmailAccounts] = useState<Array<{ id: string; email: string; is_active: boolean }>>([])
+  const [selectedGmailAccount, setSelectedGmailAccount] = useState<string>('')
+  const [gmailETLMode, setGmailETLMode] = useState<string>('since_last')
+  const [gmailETLFromDate, setGmailETLFromDate] = useState<string>('')
+  const [gmailETLToDate, setGmailETLToDate] = useState<string>('')
+  const [gmailETLStatus, setGmailETLStatus] = useState<{ batchId?: string; status?: string; loading: boolean }>({ loading: false })
   
   // Next-gen intelligence layer state
   const [activeTab, setActiveTab] = useState<'overview' | 'intelligence' | 'analytics' | 'budget' | 'goals'>('overview')
