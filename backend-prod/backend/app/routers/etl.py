@@ -361,10 +361,13 @@ def apply_categorization_rules(
     rows: List[Dict[str, Any]],
     bank_code: str
 ) -> List[Dict[str, Any]]:
-    """Apply categorization rules from enrichment.txn_categorization_rule table"""
+    """Apply categorization rules from enrichment.txn_categorization_rule table with fallback to ML categorizer"""
     if not rows:
         return []
-    
+
+    # Import the enhanced categorizer
+    from app.services.categorizer_new import categorize_transaction
+
     # Load rules once - handle case where table doesn't exist yet
     try:
         rule_rows = session.execute(text("""
@@ -375,36 +378,39 @@ def apply_categorization_rules(
               AND (bank_code = :bank_code OR bank_code IS NULL)
             ORDER BY priority ASC
         """), {"bank_code": bank_code}).mappings().all()
-        
+
         rules = [dict(r) for r in rule_rows]
+        logger.info(f"Loaded {len(rules)} categorization rules from database")
     except Exception as e:
-        # Table doesn't exist yet - log warning and continue without categorization
+        # Table doesn't exist yet - use ML categorizer as fallback
         logger.warning(
             f"Categorization rules table not found: {e}. "
-            f"Transactions will be imported as 'uncategorized'. "
-            f"Run migration 026_excel_categorization_rules.sql to enable categorization."
+            f"Using ML-based categorizer as fallback. "
+            f"Run migration 026_excel_categorization_rules.sql to enable rule-based categorization."
         )
         rules = []
-    
+
     categorized: List[Dict[str, Any]] = []
-    
+
     for r in rows:
-        primary = "uncategorized"
-        sub = "uncategorized"
-        
+        primary = None
+        sub = None
+        matched_by_rule = False
+
+        # Try rule-based categorization first
         for rule in rules:
             # direction filter
             if rule["direction"] and rule["direction"] != r["direction"]:
                 continue
-            
+
             field_name = rule["match_field"]
             haystack = (r.get(field_name) or "").lower()
-            
+
             if not haystack:
                 continue
-            
+
             pat = (rule["match_value"] or "").lower()
-            
+
             matched = False
             if rule["match_type"] == "contains":
                 matched = pat in haystack
@@ -416,16 +422,28 @@ def apply_categorization_rules(
                         matched = True
                 except re.error:
                     matched = False
-            
+
             if matched:
                 primary = rule["primary_category"]
                 sub = rule["sub_category"]
+                matched_by_rule = True
                 break  # respect priority
-        
-        r["primary_category"] = primary
-        r["sub_category"] = sub
+
+        # If no rule matched, use ML categorizer
+        if not matched_by_rule:
+            cat, subcat, confidence = categorize_transaction(
+                description=r.get("description", ""),
+                amount=float(r.get("amount", 0)),
+                channel=r.get("channel"),
+                raw_meta=r.get("raw_meta")
+            )
+            primary = cat
+            sub = subcat
+
+        r["primary_category"] = primary or "uncategorized"
+        r["sub_category"] = sub or "uncategorized"
         categorized.append(r)
-    
+
     return categorized
 
 

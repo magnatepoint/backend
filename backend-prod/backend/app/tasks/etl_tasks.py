@@ -159,17 +159,14 @@ def parse_gmail_task(self, batch_id: str, gmail_account_id: str, user_id: str):
             session.commit()
             return
 
-        # TODO: replace this with your real Gmail fetch
-        # e.g. messages = GmailService(gmail_acc).fetch_new_transaction_emails()
-        # For now, this is a stub - you'll need to implement Gmail API integration
-        messages: List[Dict[str, Any]] = []  # stub
-        
+        # Fetch Gmail messages using Gmail service
         logger.info(f"Fetching Gmail messages for account {gmail_account_id}, batch {batch_id}")
-        # TODO: Implement actual Gmail fetching here
-        # Example:
-        # from app.services.gmail_service import GmailService
-        # gmail_service = GmailService(gmail_acc)
-        # messages = gmail_service.fetch_transaction_emails()
+
+        from app.services.gmail_service import GmailService
+        gmail_service = GmailService(gmail_acc)
+        messages = gmail_service.fetch_transaction_emails(max_results=50)
+
+        logger.info(f"Fetched {len(messages)} messages from Gmail")
 
         # Convert to staged transactions
         records = gmail_messages_to_staged_transactions(

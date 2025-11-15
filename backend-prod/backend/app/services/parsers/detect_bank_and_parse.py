@@ -3,6 +3,7 @@ import pdfplumber
 import re
 from typing import List, Dict, Any
 from datetime import datetime
+from app.services.categorizer_new import categorize_transaction
 
 
 def detect_bank_and_parse(file_path: str, ext: str) -> List[Dict[str, Any]]:
@@ -135,64 +136,163 @@ def detect_bank_from_df(df) -> str:
 def parse_excel_csv_by_bank(bank: str, df) -> List[Dict[str, Any]]:
     """
     Parse Excel/CSV by bank-specific format.
-    Minimal implementation — customize per bank
+    Enhanced with better column detection and error handling
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     results = []
-    
-    # Try to find date, description, amount columns
+
+    # Clean column names
+    df.columns = [str(col).strip() for col in df.columns]
+
+    # Try to find date, description, amount columns with fuzzy matching
     date_col = None
     desc_col = None
     amount_col = None
-    
+    debit_col = None
+    credit_col = None
+    balance_col = None
+
     for col in df.columns:
         col_lower = str(col).lower()
-        if "date" in col_lower and date_col is None:
+
+        # Date column detection
+        if date_col is None and any(x in col_lower for x in ["date", "txn date", "transaction date", "value date"]):
             date_col = col
-        if any(x in col_lower for x in ["desc", "narration", "particulars", "details"]):
+            logger.info(f"Detected date column: {col}")
+
+        # Description column detection
+        if desc_col is None and any(x in col_lower for x in ["desc", "narration", "particulars", "details", "remarks", "transaction"]):
             desc_col = col
-        if "amount" in col_lower and amount_col is None:
+            logger.info(f"Detected description column: {col}")
+
+        # Amount columns detection
+        if "withdrawal" in col_lower or ("debit" in col_lower and "amount" in col_lower):
+            debit_col = col
+            logger.info(f"Detected debit column: {col}")
+        elif "deposit" in col_lower or ("credit" in col_lower and "amount" in col_lower):
+            credit_col = col
+            logger.info(f"Detected credit column: {col}")
+        elif "amount" in col_lower and amount_col is None:
             amount_col = col
-    
-    for _, row in df.iterrows():
+            logger.info(f"Detected amount column: {col}")
+
+        # Balance column
+        if "balance" in col_lower and balance_col is None:
+            balance_col = col
+
+    if not date_col or not desc_col:
+        logger.warning(f"Could not detect required columns. Date: {date_col}, Desc: {desc_col}")
+        logger.warning(f"Available columns: {list(df.columns)}")
+
+    row_count = 0
+    skipped_count = 0
+
+    for idx, row in df.iterrows():
         try:
-            # Get values
+            # Parse date
             txn_date = None
-            if date_col:
+            if date_col and pd.notna(row.get(date_col)):
                 date_val = row.get(date_col)
-                if pd.notna(date_val):
-                    if isinstance(date_val, str):
+                if isinstance(date_val, str):
+                    # Try multiple date formats
+                    for fmt in ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y", "%d/%m/%y"]:
                         try:
-                            txn_date = datetime.strptime(date_val, "%d/%m/%Y").date()
+                            txn_date = datetime.strptime(date_val.strip(), fmt).date()
+                            break
                         except:
-                            try:
-                                txn_date = datetime.strptime(date_val, "%Y-%m-%d").date()
-                            except:
-                                pass
-                    elif hasattr(date_val, 'date'):
-                        txn_date = date_val.date()
-            
-            description = str(row.get(desc_col, "")) if desc_col else ""
-            amount_val = row.get(amount_col, 0) if amount_col else 0
-            
-            # Determine direction
-            amount = float(amount_val) if pd.notna(amount_val) else 0.0
-            direction = "CREDIT" if amount >= 0 else "DEBIT"
-            amount = abs(amount)
-            
+                            continue
+                elif hasattr(date_val, 'date'):
+                    txn_date = date_val.date()
+                elif isinstance(date_val, pd.Timestamp):
+                    txn_date = date_val.date()
+
+            # Skip rows without valid date
+            if not txn_date:
+                skipped_count += 1
+                continue
+
+            # Parse description
+            description = str(row.get(desc_col, "")).strip() if desc_col else ""
+            if not description or description.lower() in ["nan", "none", ""]:
+                skipped_count += 1
+                continue
+
+            # Parse amount and direction
+            amount = 0.0
+            direction = "DEBIT"
+
+            if debit_col and credit_col:
+                # Separate debit/credit columns
+                debit_val = row.get(debit_col, 0)
+                credit_val = row.get(credit_col, 0)
+
+                if pd.notna(debit_val) and float(debit_val) > 0:
+                    amount = abs(float(debit_val))
+                    direction = "DEBIT"
+                elif pd.notna(credit_val) and float(credit_val) > 0:
+                    amount = abs(float(credit_val))
+                    direction = "CREDIT"
+                else:
+                    skipped_count += 1
+                    continue
+            elif amount_col:
+                # Single amount column
+                amount_val = row.get(amount_col, 0)
+                if pd.notna(amount_val):
+                    amount = float(amount_val)
+                    direction = "CREDIT" if amount >= 0 else "DEBIT"
+                    amount = abs(amount)
+                else:
+                    skipped_count += 1
+                    continue
+            else:
+                skipped_count += 1
+                continue
+
+            # Skip zero amount transactions
+            if amount == 0:
+                skipped_count += 1
+                continue
+
+            # Parse balance
+            balance_after = None
+            if balance_col and pd.notna(row.get(balance_col)):
+                try:
+                    balance_after = float(row.get(balance_col))
+                except:
+                    pass
+
+            # Auto-categorize transaction
+            category, subcategory, confidence = categorize_transaction(
+                description=description,
+                amount=amount,
+                channel="EXCEL"
+            )
+
             results.append({
                 "account_number_masked": "XXXX",
                 "bank_code": bank,
-                "txn_date": txn_date or datetime.now().date(),
+                "txn_date": txn_date,
                 "posted_date": None,
                 "description": description,
                 "amount": amount,
                 "direction": direction,
-                "balance_after": None,
-                "channel": "CSV" if bank == "CSV" else "EXCEL",
-                "raw_meta": {"source": "excel_csv", "bank": bank},
+                "balance_after": balance_after,
+                "channel": "EXCEL",
+                "category": category,
+                "subcategory": subcategory,
+                "categorization_confidence": confidence,
+                "raw_meta": {"source": "excel_csv", "bank": bank, "row_index": idx},
             })
+            row_count += 1
+
         except Exception as e:
+            logger.warning(f"Error parsing row {idx}: {e}")
+            skipped_count += 1
             continue
-    
+
+    logger.info(f"Parsed {row_count} transactions, skipped {skipped_count} rows")
     return results
 

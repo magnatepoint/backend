@@ -7,34 +7,54 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 
-# Very simple helpers – you can replace with your real Gmail wrapper
+# Enhanced helpers for better transaction extraction
 def parse_amount(text: str) -> Optional[float]:
-    """Extract amount from text (INR, Rs., ₹)"""
-    m = re.search(r'(?i)(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.[0-9]+)?)', text)
-    if not m:
-        return None
-    return float(m.group(1).replace(",", ""))
+    """Extract amount from text (INR, Rs., ₹) with multiple patterns"""
+    # Try multiple patterns for amount extraction
+    patterns = [
+        r'(?i)(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.[0-9]+)?)',  # INR 1,234.56
+        r'(?i)(?:amount|paid|debited|credited)[:\s]+(?:INR|Rs\.?|₹)?\s*([0-9,]+(?:\.[0-9]+)?)',  # Amount: 1234.56
+        r'(?i)(?:total|bill)[:\s]+(?:INR|Rs\.?|₹)?\s*([0-9,]+(?:\.[0-9]+)?)',  # Total: 1234
+        r'\b([0-9,]+\.[0-9]{2})\b',  # Plain decimal amount like 1234.56
+    ]
+
+    for pattern in patterns:
+        m = re.search(pattern, text)
+        if m:
+            try:
+                amount_str = m.group(1).replace(",", "")
+                amount = float(amount_str)
+                if amount > 0:  # Only return positive amounts
+                    return amount
+            except (ValueError, IndexError):
+                continue
+
+    return None
 
 
 def parse_date(text: str) -> Optional[datetime]:
-    """Parse date from text - TODO: improve with dateparser or custom formats"""
-    # Try DD-MMM-YYYY format
-    m = re.search(r'(\d{1,2}[/-][A-Za-z]{3}[/-]\d{2,4})', text)
-    if not m:
-        # Try DD/MM/YYYY
-        m = re.search(r'(\d{1,2}/\d{1,2}/\d{2,4})', text)
-    if not m:
-        return None
-    try:
-        return datetime.strptime(m.group(1), "%d-%b-%Y")
-    except ValueError:
-        try:
-            return datetime.strptime(m.group(1), "%d/%m/%Y")
-        except ValueError:
-            try:
-                return datetime.strptime(m.group(1), "%d-%m-%Y")
-            except ValueError:
-                return None
+    """Parse date from text with multiple format support"""
+    # Try multiple date patterns
+    date_patterns = [
+        (r'(\d{1,2}[/-][A-Za-z]{3}[/-]\d{2,4})', ["%d-%b-%Y", "%d/%b/%Y"]),  # 15-Jan-2024
+        (r'(\d{1,2}/\d{1,2}/\d{4})', ["%d/%m/%Y", "%m/%d/%Y"]),  # 15/01/2024
+        (r'(\d{1,2}-\d{1,2}-\d{4})', ["%d-%m-%Y", "%m-%d-%Y"]),  # 15-01-2024
+        (r'(\d{4}-\d{1,2}-\d{1,2})', ["%Y-%m-%d"]),  # 2024-01-15
+        (r'(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})', ["%d %b %Y", "%d %B %Y"]),  # 15 Jan 2024
+    ]
+
+    for pattern, formats in date_patterns:
+        m = re.search(pattern, text)
+        if m:
+            date_str = m.group(1)
+            for fmt in formats:
+                try:
+                    return datetime.strptime(date_str, fmt)
+                except ValueError:
+                    continue
+
+    # If no date found, return current date
+    return datetime.now()
 
 
 def is_loan_email(subject: str, body: str) -> bool:
