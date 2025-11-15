@@ -1156,6 +1156,37 @@ async def upload_xlsx_etl(
         raise HTTPException(status_code=500, detail=f"Failed to process Excel file: {str(e)}")
 
 
+@router.get("/gmail/accounts")
+async def get_gmail_accounts(
+    user: UserDep = Depends(get_current_user)
+):
+    """
+    Get list of connected Gmail accounts for the user.
+    """
+    from app.models.etl_models import GmailAccount
+    
+    session = SessionLocal()
+    try:
+        accounts = (
+            session.query(GmailAccount)
+            .filter_by(user_id=user.user_id)
+            .all()
+        )
+        
+        return [
+            {
+                "id": acc.id,
+                "email": acc.email,
+                "is_active": acc.is_active,
+                "last_history_id": acc.last_history_id,
+                "created_at": acc.created_at.isoformat() if acc.created_at else None,
+            }
+            for acc in accounts
+        ]
+    finally:
+        session.close()
+
+
 @router.post("/upload/pdf", response_model=ETLResponse)
 async def upload_pdf_etl(
     file: UploadFile = File(...),
